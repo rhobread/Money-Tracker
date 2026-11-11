@@ -23,6 +23,20 @@ function formatMoney(minor) {
 }
 
 function validateWallet(value) {
+  if (value?.version === 3) {
+    if (value.currency !== 'IDR' || !Array.isArray(value.sources)
+        || !validTimestamp(value.updatedAt)) throw new Error('Saved money sources could not be read.');
+    const ids = new Set();
+    const sources = value.sources.map((source) => {
+      if (!source || typeof source.id !== 'string' || !source.id.trim() || ids.has(source.id)) {
+        throw new Error('Invalid source ID.');
+      }
+      ids.add(source.id);
+      return { id: source.id, ...validateSource(source) };
+    });
+    totalMinor(sources);
+    return { version: 3, currency: 'IDR', sources, updatedAt: value.updatedAt };
+  }
   if (!value || !((value.version === 1 && LEGACY_CURRENCIES.includes(value.currency))
       || (value.version === 2 && value.currency === 'IDR')) || !Number.isSafeInteger(value.balanceMinor)
       || Math.abs(value.balanceMinor) > MAX_MINOR
@@ -31,7 +45,31 @@ function validateWallet(value) {
     throw new Error('Saved balance data could not be read. Your stored data has not been changed.');
   }
   // Relabel legacy balances without converting or rounding their numeric amount.
-  return { ...value, version: 2, currency: 'IDR' };
+  return { version: 3, currency: 'IDR', updatedAt: value.updatedAt,
+    sources: [{ id: 'legacy-balance', name: 'My money', amountMinor: value.balanceMinor }] };
 }
 
-module.exports = { parseAmount, formatMoney, validateWallet };
+function validTimestamp(value) {
+  return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+}
+
+function validateSource(value) {
+  if (typeof value?.name !== 'string' || !value.name.trim() || value.name.trim().length > 80) {
+    throw new Error('Enter a name of 1 to 80 characters.');
+  }
+  if (!Number.isSafeInteger(value.amountMinor) || Math.abs(value.amountMinor) > MAX_MINOR) {
+    throw new Error('Enter an amount smaller than 10 billion.');
+  }
+  return { name: value.name.trim(), amountMinor: value.amountMinor };
+}
+
+function totalMinor(sources) {
+  // BigInt keeps cancellation exact and detects totals beyond safe integer storage.
+  const total = sources.reduce((sum, source) => sum + BigInt(source.amountMinor), 0n);
+  if (total > BigInt(Number.MAX_SAFE_INTEGER) || total < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new Error('The total amount is too large.');
+  }
+  return Number(total);
+}
+
+module.exports = { parseAmount, formatMoney, validateWallet, validateSource, totalMinor };

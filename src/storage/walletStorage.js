@@ -4,8 +4,8 @@ import { validateWallet } from '../utils/money';
 const STORAGE_KEY = '@money-tracker/wallet';
 
 export const initialWallet = {
-  version: 2,
-  balanceMinor: 0,
+  version: 3,
+  sources: [],
   currency: 'IDR',
   updatedAt: null,
 };

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadWallet, saveWallet } from '../storage/walletStorage';
+import { validateWallet } from '../utils/money';
 
 export function useWallet() {
   const [wallet, setWallet] = useState(null);
@@ -14,7 +15,8 @@ export function useWallet() {
     try {
       setWallet(await loadWallet());
     } catch {
-      setLoadError('We could not load your saved balance. Your data has not been overwritten. Please try again.');
+      setWallet(null);
+      setLoadError('Could not load your money sources. Stored data has not been changed. Try again.');
     } finally {
       setLoading(false);
     }
@@ -22,12 +24,12 @@ export function useWallet() {
 
   useEffect(() => { reload(); }, []);
 
-  async function updateBalance(balanceMinor) {
-    if (savingRef.current || !wallet) return false;
+  async function updateSources(sources) {
+    if (savingRef.current || !wallet || loading || loadError) return false;
     savingRef.current = true;
     setSaving(true);
     try {
-      const next = { ...wallet, balanceMinor, updatedAt: new Date().toISOString() };
+      const next = validateWallet({ ...wallet, sources, updatedAt: new Date().toISOString() });
       await saveWallet(next);
       setWallet(next);
       return true;
@@ -37,5 +39,5 @@ export function useWallet() {
     }
   }
 
-  return { wallet, loading, loadError, saving, reload, updateBalance };
+  return { wallet, loading, loadError, saving, reload, updateSources };
 }

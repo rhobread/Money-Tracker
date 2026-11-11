@@ -1,6 +1,6 @@
 # Money Tracker
 
-A mobile money tracker built with Expo and JavaScript. Set your current balance in Indonesian rupiah (IDR) and save your changes locally on your phone.
+A personal money tracker built with Expo and JavaScript. Track named money sources in Indonesian rupiah (IDR); the current balance is their sum.
 
 ## Requirements
 
@@ -47,14 +47,17 @@ To stop the development server, press `Ctrl+C` in the terminal. To run it again 
 
 ## Use The App
 
-1. Tap **Set your balance**.
-2. Enter your current amount in IDR, without thousands separators. Up to two decimal places are supported with a comma or dot (for example, `1250,50`).
-3. Tap **Save balance** to save it on the device.
-4. Tap **Update balance** whenever you want to change it.
+1. Tap the **Current balance** card to show your money sources. Tap it again to hide them.
+2. Tap **Add source** and enter a name, such as Bank A or Cash.
+3. Enter its amount in IDR, without thousands separators. Up to two decimal places are supported with a comma or dot (for example, `1250,50`). Negative amounts are supported.
+4. Tap **Save**. Bank A with 1000 and Bank B with 2000 produce a current balance of 3000.
+5. Use **Edit** to change a source's name or amount. **Delete** asks for confirmation before removing it.
 
 The initial balance is zero and IDR is the only currency. Balances use Indonesian formatting, for example `Rp 1.250,50`. Two decimal places are retained so existing fractional balances are not rounded away.
 
-Existing version 1 balances (USD, EUR, GBP, PHP, INR, CAD, or AUD) are relabeled as IDR, not converted using exchange rates: an old balance of USD 123.45 becomes IDR 123.45. Loading migrates the data in memory while preserving the integer amount and last-updated timestamp; the original stored data is left untouched until you save a balance, which writes version 2. Invalid or unsupported data is rejected without overwriting it.
+Existing version 1 balances (USD, EUR, GBP, PHP, INR, CAD, or AUD) and version 2 IDR balances become one source named **My money**. Every integer hundredth, including zero and negative values, and the last-updated timestamp are preserved. Legacy currencies are relabeled as IDR without exchange-rate conversion. Migration happens in memory; the original stored JSON is untouched until a successful add, edit, or delete writes version 3. Invalid or unsupported data blocks editing and offers a retry without overwriting storage.
+
+Names must contain 1 to 80 characters after trimming. Each amount must be smaller than 10 billion rupiah in magnitude. Totals must fit within JavaScript's safe integer range in hundredths. The balance is derived, not separately editable. Failed saves retain the previous list and total; repeated submissions are blocked while saving.
 
 ## Run In An Emulator
 
@@ -116,7 +119,7 @@ npm.cmd start
 ## Local Data Storage
 
 - The app saves JSON using AsyncStorage under the key `@money-tracker/wallet`.
-- Version 2 data contains the balance in integer hundredths of a rupiah (`balanceMinor`), currency fixed to `IDR`, last-updated timestamp, and a schema version. The minor-unit scale is unchanged from version 1 to avoid losing saved amounts.
+- Version 3 data contains `sources` (each with a stable `id`, `name`, and integer `amountMinor`), currency fixed to `IDR`, `updatedAt`, and `version`. Amounts remain in hundredths of a rupiah. No separate total is stored.
 - Saving successfully updates both the stored data and the displayed balance.
 - Data persists between app launches. There is no account, backend, or app-managed cloud sync.
 - This is app-private storage, not a user-visible JSON file in your Downloads folder.
@@ -131,13 +134,14 @@ The balance functionality works without a backend. During development, Expo Go s
 App.js                         App entry component
 index.js                       Expo entry registration
 src/
-  components/BalanceEditor.js  Balance editing form
+  components/SourceEditor.js   Source editing form
   screens/BalanceScreen.js    Main dashboard
   hooks/useWallet.js          Loading and saving state
   storage/walletStorage.js    Local JSON persistence
   utils/money.js              Amount parsing and data validation
   theme.js                   Shared colors
-tests/money.test.js           Money and data validation tests
+tests/money.test.js           Validation, totals and migration tests
+tests/storage.test.js         Persistence and failure-protection tests
 ```
 
 ## Development Checks
@@ -161,7 +165,3 @@ npx expo export --platform all
 ```
 
 Exported bundles are written to `dist/`. This checks bundling; it does not create an APK or iOS installation file and does not replace testing on a device.
-
-
-to run
-npm start -- --go
