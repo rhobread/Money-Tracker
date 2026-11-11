@@ -31,7 +31,7 @@ export function BalanceScreen() {
           <View style={styles.localBadge}><View style={styles.dot} /><Text style={styles.localText}>LOCAL</Text></View>
         </View>
 
-        <Text style={styles.eyebrow}>A LITTLE CLARITY, EVERY DAY</Text>
+        <Text style={styles.eyebrow}>Testing</Text>
         <Text style={styles.title}>Your money.{'\n'}At a glance.</Text>
         <Text style={styles.subtitle}>Know where you stand. Start from here.</Text>
 
