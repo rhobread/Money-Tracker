@@ -1,0 +1,37 @@
+// Store integer minor units, never floating-point currency values.
+const LEGACY_CURRENCIES = ['USD', 'EUR', 'GBP', 'PHP', 'INR', 'CAD', 'AUD'];
+const MAX_MINOR = 999999999999;
+
+function parseAmount(value) {
+  const normalized = value.trim().replace(',', '.');
+  if (!/^-?\d+(\.\d{1,2})?$/.test(normalized)) {
+    throw new Error('Enter an amount with up to 2 decimal places, like 1250,50, without thousands separators.');
+  }
+  const negative = normalized.startsWith('-');
+  const [whole, fraction = ''] = normalized.replace('-', '').split('.');
+  const minor = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+  if (!Number.isSafeInteger(minor) || minor > MAX_MINOR) {
+    throw new Error('Please enter an amount smaller than 10 billion.');
+  }
+  return negative && minor !== 0 ? -minor : minor;
+}
+
+function formatMoney(minor) {
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency', currency: 'IDR', minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }).format(minor / 100);
+}
+
+function validateWallet(value) {
+  if (!value || !((value.version === 1 && LEGACY_CURRENCIES.includes(value.currency))
+      || (value.version === 2 && value.currency === 'IDR')) || !Number.isSafeInteger(value.balanceMinor)
+      || Math.abs(value.balanceMinor) > MAX_MINOR
+      || (value.updatedAt !== null && (typeof value.updatedAt !== 'string'
+      || !Number.isFinite(Date.parse(value.updatedAt))))) {
+    throw new Error('Saved balance data could not be read. Your stored data has not been changed.');
+  }
+  // Relabel legacy balances without converting or rounding their numeric amount.
+  return { ...value, version: 2, currency: 'IDR' };
+}
+
+module.exports = { parseAmount, formatMoney, validateWallet };
