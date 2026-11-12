@@ -2,5 +2,7 @@ node_modules/
 .expo/
 dist/
 web-build/
+android/
+ios/
 .kilo/
 package-lock.json

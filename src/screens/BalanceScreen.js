@@ -4,10 +4,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useMoneyData } from '../hooks/useMoneyData';
 import { TrackerScreen } from './TrackerScreen';
 import { MoneySourcesScreen } from './MoneySourcesScreen';
+import { AccountScreen } from './AccountScreen';
 import { formatMoney, totalMinor } from '../utils/money';
 import { colors } from '../theme';
 
 export function BalanceScreen() {
+	const [page, setPage] = useState(null);
+	const [syncPaused, setSyncPaused] = useState(false);
+	const money = useMoneyData({ pauseSync: syncPaused });
 	const {
 		data,
 		loading,
@@ -18,8 +22,11 @@ export function BalanceScreen() {
 		saveTracker,
 		saveEntry,
 		deleteTracker,
-	} = useMoneyData();
-	const [page, setPage] = useState(null);
+	} = money;
+
+	if (page === 'account' || money.conflict) {
+		return <AccountScreen session={money} onBack={() => setPage(null)} />;
+	}
 
 	if (loading || loadError) {
 		return (
@@ -38,6 +45,14 @@ export function BalanceScreen() {
 						>
 							<Text style={styles.buttonText}>Try again</Text>
 						</Pressable>
+						<Pressable
+							accessibilityRole="button"
+							disabled={saving}
+							onPress={() => setPage('account')}
+							style={styles.button}
+						>
+							<Text style={styles.buttonText}>Google Drive / account recovery</Text>
+						</Pressable>
 					</>
 				)}
 			</SafeAreaView>
@@ -51,6 +66,7 @@ export function BalanceScreen() {
 				wallet={wallet}
 				saving={saving}
 				updateSources={updateSources}
+				onEditingChange={setSyncPaused}
 				onBack={() => setPage(null)}
 			/>
 		);
@@ -65,6 +81,7 @@ export function BalanceScreen() {
 				saveTracker={saveTracker}
 				saveEntry={saveEntry}
 				deleteTracker={deleteTracker}
+				onEditingChange={setSyncPaused}
 				onBack={() => setPage(null)}
 			/>
 		);
@@ -78,6 +95,7 @@ export function BalanceScreen() {
 					accessibilityRole="button"
 					accessibilityLabel="Current balance"
 					accessibilityHint="Open money sources"
+					disabled={saving}
 					onPress={() => setPage('sources')}
 					style={({ pressed }) => [styles.balanceCard, pressed && styles.pressed]}
 				>
@@ -96,6 +114,7 @@ export function BalanceScreen() {
 					<Pressable
 						key={kind}
 						accessibilityRole="button"
+						disabled={saving}
 						onPress={() => setPage(kind)}
 						style={({ pressed }) => [styles.trackerCard, pressed && styles.pressed]}
 					>
@@ -110,6 +129,30 @@ export function BalanceScreen() {
 						</Text>
 					</Pressable>
 				))}
+				<Pressable
+					accessibilityRole="button"
+					accessibilityLabel="Open Google Drive account"
+					disabled={saving}
+					onPress={() => setPage('account')}
+					style={({ pressed }) => [styles.trackerCard, pressed && styles.pressed]}
+				>
+					<View style={styles.trackerHeading}>
+						<Text style={styles.sectionName}>Google Drive</Text>
+						<Text style={styles.edit}>Open</Text>
+					</View>
+					<Text style={styles.body}>{money.account?.email ?? 'Device only'}</Text>
+					<Text style={styles.body}>
+						{money.syncing
+							? 'Syncing...'
+							: money.syncError
+								? 'Sync needs attention'
+								: money.dirty
+									? 'Changes waiting to sync'
+									: money.account
+										? 'Account data saved on this phone'
+										: 'Sign in to save and restore your data'}
+					</Text>
+				</Pressable>
 			</ScrollView>
 		</SafeAreaView>
 	);

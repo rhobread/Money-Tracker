@@ -14,10 +14,14 @@ import { SourceEditor } from '../components/SourceEditor';
 import { formatMoney, totalMinor } from '../utils/money';
 import { colors } from '../theme';
 
-export function MoneySourcesScreen({ wallet, saving, updateSources, onBack }) {
+export function MoneySourcesScreen({ wallet, saving, updateSources, onEditingChange, onBack }) {
 	const [editing, setEditing] = useState(null);
 	const [error, setError] = useState(null);
 	const confirming = useRef(false);
+	useEffect(() => {
+		onEditingChange?.(editing !== null);
+		return () => onEditingChange?.(false);
+	}, [editing !== null, onEditingChange]);
 
 	function goBack() {
 		if (!saving && !confirming.current) onBack();
@@ -51,6 +55,7 @@ export function MoneySourcesScreen({ wallet, saving, updateSources, onBack }) {
 	function deleteSource(source) {
 		if (saving || confirming.current) return;
 		confirming.current = true;
+		onEditingChange?.(true);
 		Alert.alert(
 			'Delete source?',
 			`Delete "${source.name}" and its balance? Sources used by income or payments must be unlinked first.`,
@@ -60,6 +65,7 @@ export function MoneySourcesScreen({ wallet, saving, updateSources, onBack }) {
 					style: 'cancel',
 					onPress: () => {
 						confirming.current = false;
+						onEditingChange?.(false);
 					},
 				},
 				{
@@ -77,6 +83,7 @@ export function MoneySourcesScreen({ wallet, saving, updateSources, onBack }) {
 							setError(saveError.message || 'Could not delete source. Try again.');
 						} finally {
 							confirming.current = false;
+							onEditingChange?.(false);
 						}
 					},
 				},

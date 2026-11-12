@@ -2,7 +2,7 @@
 
 A guide to this project **without assuming you already know React**.
 
-> **Start here:** The home screen is [src/screens/BalanceScreen.js](src/screens/BalanceScreen.js). It displays your current balance, Source of Income, and Payments.
+> **Start here:** The home screen is [src/screens/BalanceScreen.js](src/screens/BalanceScreen.js). It displays your current balance, Source of Income, Payments, and Google Drive controls. Sign-in is optional.
 
 ## Contents
 
@@ -18,6 +18,7 @@ A guide to this project **without assuming you already know React**.
 - [How repeating entries work](#10-how-repeating-entries-work)
 - [Which file to edit](#11-which-file-to-edit)
 - [Useful commands](#12-useful-commands)
+- [Google sign-in and Drive sync](#13-google-sign-in-and-drive-sync)
 
 ## 1. Where The App Starts
 
@@ -177,7 +178,7 @@ A function passed to something else to call later is a **callback**. `onPress` r
 | `useEffect` | Runs work after rendering, including the initial storage load. |
 | `useRef` | Holds a value without triggering an interface update; used to block repeated actions. |
 
-`useMoneyData` is a **custom hook**: a reusable function built using React's hooks. The dashboard calls it once and passes data and save functions to the other screens. This gives balances and paid entries one shared source of truth and one save lock.
+`useMoneyData` is a **custom hook**: a reusable function built using React's hooks. The dashboard calls it once and passes data and save functions to the other screens. It subscribes to `cloudSession.js`, the controller managing device-only/account data and one shared save/sync lock. Financial changes still go through `finance.js`.
 
 For example, this hook starts loading saved data when it is first mounted:
 
@@ -205,6 +206,7 @@ const [page, setPage] = useState(null);
 | `'sources'` | Money Sources, opened by tapping the balance card. |
 | `'income'` | Source of Income. |
 | `'payment'` | Payments. |
+| `'account'` | Google Drive sign-in, sync status, and conflict choices. |
 
 Tapping the balance card calls `setPage('sources')`, and the dashboard returns `MoneySourcesScreen`. Tapping an income/payment card sets the corresponding page and returns `TrackerScreen` instead.
 
@@ -215,6 +217,8 @@ Going back to the dashboard sets `page` to `null`.
 Inside `TrackerScreen`, **`selectedId`** determines whether you see the item list or one item's recurring entries. Going back from the entries returns to the list.
 
 Editing forms appear in **modals**, over the current screen.
+
+A sync conflict also opens `AccountScreen`, so you choose a complete version before making more money edits. The money screens tell the hook when a form/delete confirmation is open; automatic sync pauses so it cannot replace a draft's values.
 
 ## 8. How The Balance Is Calculated
 
@@ -254,7 +258,11 @@ BalanceScreen.js / MoneySourcesScreen.js / TrackerScreen.js
         |
         v
 useMoneyData.js
-    Shares the loaded wallet, trackers, and saving status
+    Subscribes to the shared session and schedules foreground sync
+        |
+        v
+cloudSession.js
+    Chooses device-only/account storage and guards saves/sync/account changes
         |
         v
 finance.js
@@ -262,7 +270,10 @@ finance.js
         |
         v
 moneyStorage.js
-    Saves wallet and trackers together as JSON using AsyncStorage
+    Saves device-only wallet and trackers together using AsyncStorage
+
+cloudStorage.js
+    Saves the same complete data in a separate envelope for each Google account
 ```
 
 When you save a source:
@@ -284,6 +295,8 @@ Marking an income/payment entry paid goes through the same hook. `finance.js` ca
 | Storage key | Contents |
 | --- | --- |
 | `@money-tracker/data` | Current wallet and income/payment schedules, paid entries, source selections, and recorded balance changes. |
+| `@money-tracker/account/<Google subject ID>` | Separate account cache with the same complete money data and sync state. The ID is URL-encoded in the key. |
+| `@money-tracker/active-account` | Which Google profile is active. Display metadata only, not access tokens. |
 | `@money-tracker/wallet` | Older balance data, read only when migrating and kept untouched afterward. |
 | `@money-tracker/trackers` | Older tracker data, read only when migrating and kept untouched afterward. |
 
@@ -354,6 +367,11 @@ Paid entries keep their chosen source even if the item's default changes. The ne
 | Default and per-entry source picker | [MoneySourcePicker.js](src/components/MoneySourcePicker.js) |
 | Shared balance/tracker loading and saving state | [useMoneyData.js](src/hooks/useMoneyData.js) |
 | Combined JSON storage and migration | [moneyStorage.js](src/storage/moneyStorage.js) |
+| Account cache and active profile storage | [cloudStorage.js](src/storage/cloudStorage.js) |
+| Offline/account/sync coordination | [cloudSession.js](src/services/cloudSession.js) |
+| Google sign-in and identity verification | [googleAuth.js](src/services/googleAuth.js) |
+| Google Drive API calls | [driveStorage.js](src/services/driveStorage.js) |
+| Account, import and conflict interface | [AccountScreen.js](src/screens/AccountScreen.js) |
 | Balance adjustments, reversals, and source references | [finance.js](src/utils/finance.js) |
 | Amount parsing, formatting, totals, validation | [money.js](src/utils/money.js) |
 | Date validation and repeat calculations | [trackers.js](src/utils/trackers.js) |
@@ -367,10 +385,57 @@ Run these from the project folder:
 | Command | Purpose |
 | --- | --- |
 | `npm install` | Install dependencies after cloning or when dependencies change. |
-| `npm start` | Start Expo, then open the QR code with a compatible Expo Go app. |
+| `npm start -- --go` | Start Expo Go for device-only testing. |
+| `npm start -- --dev-client` | Start Expo for an installed native development build with Google sign-in. |
+| `npx expo run:android` | Build/install Android locally; requires Android SDK/JDK setup. |
 | `Ctrl+C` | Stop Expo in the terminal where it is running. |
 | `npm test` | Run automated tests. |
 | `npm run format` | Format JavaScript and JSON files using tabs. |
 | `npm run format:check` | Check formatting without changing files. |
 
 See [README.md](README.md) for full setup instructions and troubleshooting.
+
+## 13. Google Sign-In And Drive Sync
+
+**Google sign-in is not a separate app server.** The native Google SDK obtains permission to use your account's private app-data space, and the app calls Google's Drive API directly over HTTPS.
+
+```text
+Sign in with Google
+    -> Verify the account using Google's userinfo endpoint
+    -> Open that account's separate local cache
+    -> Check the account's private Drive snapshots
+    -> Restore its current complete dataset, or ask about conflicting versions
+```
+
+**Existing device-only data is never silently assigned to a Google account.** A new empty account offers **Copy device-only data**, with confirmation. Signing into another account opens that account's data, not the previous account's data. Signing out returns to your separate device-only copy and retains account caches/unsynced edits.
+
+### Why Save Locally First?
+
+Local saving works offline. An account change gets a new revision ID and is marked **dirty**, meaning it has not yet been uploaded. The hook waits briefly to combine rapid changes, then asks the controller to sync. Sync also runs when the app returns to the foreground; it pauses while a financial form/delete confirmation is open. You can retry through **Sync now**.
+
+The controller downloads complete datasets; it does **not** mark every old paid entry paid again. Stored balances and their payment history are restored together, avoiding repeated balance changes.
+
+### Why Does Drive Store Snapshots?
+
+Each upload creates an immutable JSON snapshot with a new revision ID and references to its previous revision(s). Existing snapshots are not overwritten. Their metadata forms a history graph:
+
+```text
+Normal:          A -> B -> C
+
+Two devices:     A -> B
+                 A -> C
+
+After choosing:  B and C -> D
+```
+
+When both devices changed A, neither B nor C is silently discarded. The app asks you to choose this device's data or a Drive version. After confirmation, D becomes the current complete version and records both branches as its parents. There is no automatic merging of balances or paid entries.
+
+This also helps recover a timed-out upload: the next attempt checks whether that exact revision already exists instead of posting the same changes again. A revision's upload timestamp is saved locally and reused after retries/restarts. Duplicate files with the same actual data are safe, but conflicting financial content is rejected. Historical snapshots are kept and use your Google storage; automatic pruning is not implemented.
+
+Unresolved conflicts are stored in the account cache too, so restarting offline does not bypass the choice or enable edits to an unresolved dataset. **Sync now** checks whether another device has already resolved it.
+
+### What Still Needs Setup?
+
+Google requires OAuth client IDs registered to your Android package and signing certificate. `.env.example` lists the public IDs. **Do not put client secrets or access tokens in the app.** Tokens are managed by the native SDK, not the money JSON or AsyncStorage profile.
+
+Google sign-in requires a **native development build or APK**, not Expo Go. Live login and real Drive restore cannot be tested here without your Google credentials and a device. See the **Google Sign-In And Drive Sync** section of [README.md](README.md) for the one-time setup, APK build commands, pricing references, and storage limitations.

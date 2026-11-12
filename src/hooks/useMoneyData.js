@@ -1,74 +1,93 @@
 import { useEffect, useRef, useState } from 'react';
-import { loadMoneyData, saveMoneyData } from '../storage/moneyStorage';
-import {
-	updateMoneySources,
-	saveRecurringItem,
-	saveRecurringEntry,
-	deleteRecurringItem,
-} from '../utils/finance';
+import { AppState } from 'react-native';
+import { randomUUID } from 'expo-crypto';
+import * as moneyStorage from '../storage/moneyStorage';
+import * as cloudStorage from '../storage/cloudStorage';
+import { getGoogleConfiguration } from '../config/google';
+import { createGoogleAuth } from '../services/googleAuth';
+import { createDriveStorage } from '../services/driveStorage';
+import { createMoneySession } from '../services/cloudSession';
 
-export function useMoneyData() {
-	const [data, setData] = useState(null);
-	const [loading, setLoading] = useState(true);
-	const [loadError, setLoadError] = useState(null);
-	const [saving, setSaving] = useState(false);
-	const dataRef = useRef(null);
-	const loadedRef = useRef(false);
-	const loadingRef = useRef(false);
-	const savingRef = useRef(false);
+export function useMoneyData({ pauseSync = false } = {}) {
+	const pausedRef = useRef(pauseSync);
+	pausedRef.current = pauseSync;
+	const sessionRef = useRef(null);
+	const authRef = useRef(null);
+	if (!sessionRef.current) {
+		authRef.current = createGoogleAuth({ configuration: getGoogleConfiguration() });
+		sessionRef.current = createMoneySession({
+			storage: { ...moneyStorage, ...cloudStorage },
+			auth: authRef.current,
+			drive: createDriveStorage(),
+			createRevision: randomUUID,
+		});
+	}
+	const session = sessionRef.current;
+	const [state, setState] = useState(session.getState());
+	const [backgroundError, setBackgroundError] = useState(null);
 
-	async function reload() {
-		if (savingRef.current || loadingRef.current) return false;
-		loadingRef.current = true;
-		loadedRef.current = false;
-		setLoading(true);
-		setLoadError(null);
-		try {
-			const next = await loadMoneyData();
-			dataRef.current = next;
-			setData(next);
-			loadedRef.current = true;
-			return true;
-		} catch {
-			setLoadError(
-				'Could not load your money data. Stored data has not been changed. Try again.',
+	useEffect(() => {
+		const unsubscribe = session.subscribe((next) => {
+			if (next.syncing || next.authenticating) setBackgroundError(null);
+			setState(next);
+		});
+		session.initialize();
+		return unsubscribe;
+	}, [session]);
+
+	function sync() {
+		setBackgroundError(null);
+		return session.sync().catch(() => {
+			setBackgroundError(
+				'Could not save sync status on this phone. Your local data is kept. Try again.',
 			);
 			return false;
-		} finally {
-			loadingRef.current = false;
-			setLoading(false);
-		}
+		});
 	}
 
 	useEffect(() => {
-		reload();
-	}, []);
+		if (
+			pauseSync ||
+			state.loading ||
+			state.loadError ||
+			state.conflict ||
+			!state.account ||
+			!authRef.current.availability().available
+		)
+			return;
+		const timer = setTimeout(sync, 1500);
+		return () => clearTimeout(timer);
+	}, [
+		session,
+		state.account?.id,
+		state.revision,
+		state.loading,
+		state.loadError,
+		pauseSync,
+		state.conflict,
+	]);
 
-	async function commit(action, ...args) {
-		if (!loadedRef.current || loadingRef.current || savingRef.current) return false;
-		savingRef.current = true;
-		setSaving(true);
-		try {
-			const next = action(dataRef.current, ...args);
-			await saveMoneyData(next);
-			dataRef.current = next;
-			setData(next);
-			return true;
-		} finally {
-			savingRef.current = false;
-			setSaving(false);
-		}
-	}
+	useEffect(() => {
+		const subscription = AppState.addEventListener('change', (next) => {
+			if (next === 'active' && !pausedRef.current && authRef.current.availability().available)
+				sync();
+		});
+		return () => subscription.remove();
+	}, [session]);
 
 	return {
-		data,
-		loading,
-		loadError,
-		saving,
-		reload,
-		updateSources: (sources) => commit(updateMoneySources, sources),
-		saveTracker: (tracker) => commit(saveRecurringItem, tracker),
-		saveEntry: (trackerId, key, entry) => commit(saveRecurringEntry, trackerId, key, entry),
-		deleteTracker: (id) => commit(deleteRecurringItem, id),
+		...state,
+		syncError: backgroundError ?? state.syncError,
+		googleAvailability: authRef.current.availability(),
+		reload: session.reload,
+		updateSources: session.updateSources,
+		saveTracker: session.saveTracker,
+		saveEntry: session.saveEntry,
+		deleteTracker: session.deleteTracker,
+		signIn: session.signIn,
+		signOut: session.signOut,
+		sync,
+		importGuest: session.importGuest,
+		resolveConflict: session.resolveConflict,
 	};
 }

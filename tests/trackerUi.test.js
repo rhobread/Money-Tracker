@@ -106,6 +106,7 @@ test('dashboard opens separate money sources, income, and payment screens', () =
 		},
 		'./TrackerScreen': { TrackerScreen: 'TrackerScreen' },
 		'./MoneySourcesScreen': { MoneySourcesScreen: 'MoneySourcesScreen' },
+		'./AccountScreen': { AccountScreen: 'AccountScreen' },
 	});
 	let tree = render();
 	assert.doesNotMatch(text(tree), /Add source/);
@@ -131,6 +132,165 @@ test('dashboard opens separate money sources, income, and payment screens', () =
 		.find((node) => node.type === 'Pressable' && text(node).includes('Payments'))
 		.props.onPress();
 	assert.equal(render().props.kind, 'payment');
+	render().props.onBack();
+	nodes(render())
+		.find((node) => node.props.accessibilityLabel === 'Open Google Drive account')
+		.props.onPress();
+	assert.equal(render().type, 'AccountScreen');
+});
+
+test('cloud conflicts force the account screen before displaying editable money screens', () => {
+	const render = screen('../src/screens/BalanceScreen.js', {
+		'../hooks/useMoneyData': {
+			useMoneyData: () => ({
+				data: null,
+				loading: false,
+				saving: false,
+				conflict: { heads: [] },
+			}),
+		},
+		'./TrackerScreen': { TrackerScreen: 'TrackerScreen' },
+		'./MoneySourcesScreen': { MoneySourcesScreen: 'MoneySourcesScreen' },
+		'./AccountScreen': { AccountScreen: 'AccountScreen' },
+	});
+	assert.equal(render().type, 'AccountScreen');
+});
+
+function accountScreen(overrides = {}) {
+	const calls = [];
+	let confirmation;
+	const session = {
+		account: { id: 'google-a', email: 'a@example.test', name: 'A' },
+		saving: false,
+		syncing: false,
+		authenticating: false,
+		dirty: true,
+		lastSyncedAt: null,
+		syncError: null,
+		conflict: null,
+		canImportGuest: false,
+		googleAvailability: { available: true, reason: null },
+		signIn: async () => {
+			calls.push(['signIn']);
+			return true;
+		},
+		sync: async () => {
+			calls.push(['sync']);
+			return true;
+		},
+		importGuest: async () => {
+			calls.push(['importGuest']);
+			return true;
+		},
+		signOut: async () => {
+			calls.push(['signOut']);
+			return true;
+		},
+		resolveConflict: async (...args) => {
+			calls.push(['resolveConflict', ...args]);
+			return true;
+		},
+		...overrides,
+	};
+	const render = screen('../src/screens/AccountScreen.js', {
+		'react-native': {
+			Alert: {
+				alert: (...args) => {
+					confirmation = args;
+				},
+			},
+		},
+		'react-native-nitro-google-signin': { GoogleSignInButton: 'GoogleSignInButton' },
+	});
+	const current = () =>
+		render({
+			session,
+			onBack: () => {
+				calls.push(['back']);
+			},
+		});
+	return {
+		current,
+		calls,
+		session,
+		confirm: async (label) => confirmation[2].find((button) => button.text === label).onPress(),
+		message: () => confirmation?.[1],
+	};
+}
+
+test('account controls connect Google, sync manually, and confirm device data import', async () => {
+	const ui = accountScreen({ canImportGuest: true });
+	const tree = ui.current();
+	const google = nodes(tree).find((node) => node.type === 'GoogleSignInButton');
+	assert.equal(google.props.signInBehavior, 'none');
+	await google.props.onPress();
+	await nodes(tree)
+		.find((node) => node.type === 'Pressable' && text(node) === 'Sync now')
+		.props.onPress();
+	nodes(tree)
+		.find((node) => node.type === 'Pressable' && text(node) === 'Copy device-only data')
+		.props.onPress();
+	assert.match(ui.message(), /a@example\.test/);
+	assert.equal(
+		ui.calls.some(([action]) => action === 'importGuest'),
+		false,
+	);
+	await ui.confirm('Copy data');
+	assert.deepEqual(ui.calls, [['signIn'], ['sync'], ['importGuest']]);
+	assert.match(text(tree), /Waiting to sync/);
+});
+
+test('account conflict resolution confirms exact remote version and keeps signout available', async () => {
+	const ui = accountScreen({
+		conflict: {
+			message: 'Choose a version.',
+			heads: [{ revision: 'remote-123', createdAt: '2026-11-12T00:00:00.000Z' }],
+		},
+	});
+	const tree = ui.current();
+	nodes(tree)
+		.find((node) => node.type === 'Pressable' && text(node) === '< Balance')
+		.props.onPress();
+	assert.equal(ui.calls.length, 0);
+	nodes(tree)
+		.find((node) => node.type === 'Pressable' && text(node).includes('Use Drive version:'))
+		.props.onPress();
+	assert.match(ui.message(), /unsynced edits/);
+	await ui.confirm('Use Drive version');
+	assert.deepEqual(ui.calls[0], ['resolveConflict', 'remote', 'remote-123']);
+	nodes(tree)
+		.find(
+			(node) => node.type === 'Pressable' && text(node) === 'Sign out / use device-only data',
+		)
+		.props.onPress();
+	assert.match(ui.message(), /Drive data is not deleted/);
+	await ui.confirm('Sign out');
+	assert.deepEqual(ui.calls[1], ['signOut']);
+});
+
+test('unconfigured Google sign-in leaves device-only mode usable without loading native buttons', () => {
+	const ui = accountScreen({
+		account: null,
+		dirty: false,
+		googleAvailability: { available: false, reason: 'Configure OAuth IDs and rebuild.' },
+	});
+	const tree = ui.current();
+	assert.match(text(tree), /Device only/);
+	assert.match(text(tree), /Configure OAuth/);
+	assert.equal(
+		nodes(tree).some((node) => node.type === 'GoogleSignInButton'),
+		false,
+	);
+	assert.equal(
+		nodes(tree).some(
+			(node) => node.type === 'Pressable' && text(node) === 'Copy device-only data',
+		),
+		false,
+	);
+	nodes(tree)
+		.find((node) => node.type === 'Pressable' && text(node) === '< Balance')
+		.props.onPress();
+	assert.deepEqual(ui.calls, [['back']]);
 });
 
 function trackerScreen(saveEntryOverride, nativeOverrides = {}) {

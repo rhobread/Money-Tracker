@@ -33,6 +33,7 @@ export function TrackerScreen({
 	saveTracker: onSaveTracker,
 	saveEntry: onSaveEntry,
 	deleteTracker: onDeleteTracker,
+	onEditingChange,
 	onBack,
 }) {
 	const [selectedId, setSelectedId] = useState(null);
@@ -45,6 +46,10 @@ export function TrackerScreen({
 	const items = data?.items.filter((item) => item.kind === kind) ?? [];
 	const title = kind === 'income' ? 'Source of Income' : 'Payments';
 	const today = todayDate();
+	useEffect(() => {
+		onEditingChange?.(editor !== null);
+		return () => onEditingChange?.(false);
+	}, [editor !== null, onEditingChange]);
 	const sourceName = (id) => sources.find((source) => source.id === id)?.name ?? 'Not selected';
 	const occurrences = selected
 		? occurrencesForYear(selected, year).filter(
@@ -120,6 +125,7 @@ export function TrackerScreen({
 	function deleteTracker() {
 		if (saving || acting.current) return;
 		acting.current = true;
+		onEditingChange?.(true);
 		Alert.alert(
 			'Delete item?',
 			`Delete "${selected.name}" and all its saved entries? Balance changes from its paid entries will also be reversed.`,
@@ -129,6 +135,7 @@ export function TrackerScreen({
 					style: 'cancel',
 					onPress: () => {
 						acting.current = false;
+						onEditingChange?.(false);
 					},
 				},
 				{
@@ -144,6 +151,7 @@ export function TrackerScreen({
 							setError(`Could not delete item. ${saveError.message || 'Try again.'}`);
 						} finally {
 							acting.current = false;
+							onEditingChange?.(false);
 						}
 					},
 				},

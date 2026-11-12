@@ -3,8 +3,9 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { transformFileSync } = require('@babel/core');
 const finance = require('../src/utils/finance');
+const { createMoneySession } = require('../src/services/cloudSession');
 
-function loadModule(path, modules) {
+function loadModule(path, modules, globals = {}) {
 	const exports = {};
 	const { code } = transformFileSync(require.resolve(path), {
 		babelrc: false,
@@ -12,6 +13,7 @@ function loadModule(path, modules) {
 		plugins: ['@babel/plugin-transform-modules-commonjs'],
 	});
 	vm.runInNewContext(code, {
+		...globals,
 		exports,
 		require(name) {
 			if (name in modules) return modules[name];
@@ -283,12 +285,36 @@ test('save validates before its sole aggregate write and propagates single-write
 	assert.equal(storage.values.get(DATA), before);
 });
 
-function hookHarness(storage) {
+function hookHarness(storage, options = {}) {
 	const states = [];
 	const refs = [];
 	const effects = [];
+	const pendingEffects = new Set();
+	const listeners = new Set();
+	const timers = new Map();
+	const creations = { auth: 0, drive: 0, session: 0 };
+	let mounted = false;
+	let clock = 0;
+	let timerId = 0;
 	let stateIndex;
 	let refIndex;
+	let effectIndex;
+	const unexpected = () => {
+		throw new Error('Signed-out hook must not access cloud storage, auth, or Drive');
+	};
+	const auth = options.auth ?? {
+		availability: () => ({ available: false, reason: 'Test is signed out' }),
+		signIn: unexpected,
+		accessToken: unexpected,
+		signOut: unexpected,
+	};
+	const cloudStorage = {
+		loadActiveAccount: async () => null,
+		loadAccountData: unexpected,
+		saveAccountData: unexpected,
+		saveActiveAccount: unexpected,
+		...options.cloudStorage,
+	};
 	const react = {
 		useState(initial) {
 			const index = stateIndex++;
@@ -304,24 +330,105 @@ function hookHarness(storage) {
 			const index = refIndex++;
 			return refs[index] ?? (refs[index] = { current: initial });
 		},
-		useEffect(effect) {
-			if (!effects.length) effects.push(effect);
+		useEffect(effect, dependencies) {
+			const index = effectIndex++;
+			const previous = effects[index];
+			if (
+				!previous ||
+				dependencies.some((value, i) => !Object.is(value, previous.dependencies[i]))
+			) {
+				effects[index] = { effect, dependencies, cleanup: previous?.cleanup };
+				pendingEffects.add(index);
+			}
 		},
 	};
-	const { useMoneyData } = loadModule('../src/hooks/useMoneyData.js', {
-		react,
-		'../storage/moneyStorage': storage,
-		'../utils/finance': finance,
-	});
+	function commitEffects() {
+		for (const index of pendingEffects) {
+			const effect = effects[index];
+			effect.cleanup?.();
+			effect.cleanup = effect.effect();
+		}
+		pendingEffects.clear();
+	}
+	const { useMoneyData } = loadModule(
+		'../src/hooks/useMoneyData.js',
+		{
+			react,
+			'react-native': {
+				AppState: {
+					addEventListener(event, listener) {
+						assert.equal(event, 'change');
+						listeners.add(listener);
+						return { remove: () => listeners.delete(listener) };
+					},
+				},
+			},
+			'expo-crypto': { randomUUID: () => `test-revision-${++timerId}` },
+			'../storage/moneyStorage': storage,
+			'../storage/cloudStorage': cloudStorage,
+			'../config/google': { getGoogleConfiguration: () => ({}) },
+			'../services/googleAuth': {
+				createGoogleAuth: () => {
+					creations.auth++;
+					return auth;
+				},
+			},
+			'../services/driveStorage': {
+				createDriveStorage: () => {
+					creations.drive++;
+					return options.drive ?? {};
+				},
+			},
+			'../services/cloudSession': {
+				createMoneySession: (dependencies) => {
+					creations.session++;
+					return options.session ?? createMoneySession(dependencies);
+				},
+			},
+		},
+		{
+			setTimeout(callback, delay) {
+				const id = ++timerId;
+				timers.set(id, { callback, due: clock + delay });
+				return id;
+			},
+			clearTimeout: (id) => timers.delete(id),
+		},
+	);
 	return {
-		render() {
+		creations,
+		render(props) {
 			stateIndex = 0;
 			refIndex = 0;
-			return useMoneyData();
+			effectIndex = 0;
+			const result = useMoneyData(props);
+			if (mounted) commitEffects();
+			return result;
 		},
 		mount() {
-			effects[0]();
+			mounted = true;
+			commitEffects();
 		},
+		unmount() {
+			for (const effect of effects) effect.cleanup?.();
+			mounted = false;
+		},
+		appState(next) {
+			for (const listener of listeners) listener(next);
+		},
+		advance(milliseconds) {
+			const target = clock + milliseconds;
+			while (true) {
+				const next = [...timers].sort((a, b) => a[1].due - b[1].due)[0];
+				if (!next || next[1].due > target) break;
+				clock = next[1].due;
+				timers.delete(next[0]);
+				next[1].callback();
+			}
+			clock = target;
+		},
+		pendingTimers: () => timers.size,
+		listenerCount: () => listeners.size,
 	};
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -333,20 +440,33 @@ const mutations = (hook) => [
 ];
 
 test('hook starts null, guards all writes before load and blocks duplicate loads', async () => {
+	let finishAccount;
 	let finishLoad;
+	let accountLoads = 0;
 	let loads = 0;
 	let writes = 0;
-	const hook = hookHarness({
-		loadMoneyData: () => {
-			loads++;
-			return new Promise((resolve) => {
-				finishLoad = resolve;
-			});
+	const hook = hookHarness(
+		{
+			loadMoneyData: () => {
+				loads++;
+				return new Promise((resolve) => {
+					finishLoad = resolve;
+				});
+			},
+			saveMoneyData: async () => {
+				writes++;
+			},
 		},
-		saveMoneyData: async () => {
-			writes++;
+		{
+			cloudStorage: {
+				loadActiveAccount: () =>
+					new Promise((resolve) => {
+						accountLoads++;
+						finishAccount = resolve;
+					}),
+			},
 		},
-	});
+	);
 	const current = hook.render();
 	assert.equal(current.data, null);
 	assert.equal(current.loading, true);
@@ -354,6 +474,11 @@ test('hook starts null, guards all writes before load and blocks duplicate loads
 	hook.mount();
 	assert.equal(await current.reload(), false);
 	for (const mutate of mutations(current)) assert.equal(await mutate(), false);
+	assert.equal(loads, 0, 'Guest loading waits for the active account marker');
+	assert.equal(accountLoads, 1, 'Duplicate initialization must not reread the active marker');
+	assert.equal(writes, 0);
+	finishAccount(null);
+	await Promise.resolve();
 	assert.equal(loads, 1);
 	assert.equal(writes, 0);
 	finishLoad(initial());
@@ -540,4 +665,216 @@ test('corrupt aggregate cannot be overwritten through hook even when valid legac
 	assert.deepEqual(storage.reads, [DATA]);
 	assert.equal(storage.writes.length, 0);
 	assert.equal(storage.values.get(DATA), '{broken');
+});
+
+function adapterSession() {
+	let state = {
+		data: initial(),
+		loading: true,
+		loadError: null,
+		account: { id: 'google-sub', email: 'person@example.com', name: 'Person' },
+		revision: 'revision-1',
+		conflict: null,
+		dirty: true,
+		syncing: false,
+		authenticating: false,
+		syncError: null,
+	};
+	const listeners = new Set();
+	const calls = { initialize: 0, subscribe: 0, unsubscribe: 0, sync: 0 };
+	function emit(patch) {
+		state = { ...state, ...patch };
+		for (const listener of listeners) listener(state);
+	}
+	return {
+		calls,
+		emit,
+		getState: () => state,
+		subscribe(listener) {
+			calls.subscribe++;
+			listeners.add(listener);
+			return () => {
+				calls.unsubscribe++;
+				listeners.delete(listener);
+			};
+		},
+		async initialize() {
+			calls.initialize++;
+			assert.equal(listeners.size, 1, 'Subscribe before initialization emits');
+			emit({ loading: false });
+		},
+		async sync() {
+			calls.sync++;
+			emit({ syncing: true });
+			emit({ syncing: false, dirty: false, lastSyncedAt: '2026-11-12T09:00:00.000Z' });
+			return true;
+		},
+	};
+}
+const availableAuth = { availability: () => ({ available: true, reason: null }) };
+
+test('hook subscribes before initialize, keeps one session, and cleans up lifecycle subscriptions', () => {
+	const session = adapterSession();
+	const hook = hookHarness({}, { session, auth: availableAuth });
+	assert.equal(hook.render().loading, true);
+	hook.mount();
+	assert.equal(hook.render().loading, false);
+	hook.render();
+	assert.equal(session.calls.initialize, 1);
+	assert.equal(session.calls.subscribe, 1);
+	assert.deepEqual(hook.creations, { auth: 1, drive: 1, session: 1 });
+	assert.equal(hook.listenerCount(), 1);
+	assert.equal(hook.pendingTimers(), 1);
+	hook.unmount();
+	assert.equal(session.calls.unsubscribe, 1);
+	assert.equal(hook.listenerCount(), 0);
+	assert.equal(hook.pendingTimers(), 0);
+	hook.advance(2000);
+	hook.appState('active');
+	assert.equal(session.calls.sync, 0);
+});
+
+test('hook debounces revisions once and acknowledgement emissions do not create a sync loop', async () => {
+	const session = adapterSession();
+	const hook = hookHarness({}, { session, auth: availableAuth });
+	hook.render();
+	hook.mount();
+	hook.render();
+	hook.advance(1000);
+	session.emit({ revision: 'revision-2' });
+	hook.render();
+	hook.advance(1000);
+	session.emit({ revision: 'revision-3' });
+	hook.render();
+	hook.advance(1499);
+	assert.equal(session.calls.sync, 0);
+	assert.equal(hook.pendingTimers(), 1);
+	hook.advance(1);
+	await flush();
+	assert.equal(session.calls.sync, 1);
+	assert.equal(hook.render().dirty, false);
+	assert.equal(hook.pendingTimers(), 0);
+	session.emit({ saving: false, syncing: false, lastSyncedAt: '2026-11-12T09:01:00.000Z' });
+	hook.render();
+	hook.advance(10000);
+	assert.equal(session.calls.sync, 1);
+	hook.unmount();
+});
+
+test('financial editor pause cancels revision sync and foreground sync reads the latest pause', async () => {
+	const session = adapterSession();
+	const hook = hookHarness({}, { session, auth: availableAuth });
+	hook.render();
+	hook.mount();
+	hook.render();
+	hook.advance(1000);
+	hook.render({ pauseSync: true });
+	assert.equal(hook.pendingTimers(), 0);
+	session.emit({ revision: 'editor-revision' });
+	hook.render({ pauseSync: true });
+	hook.appState('background');
+	hook.appState('active');
+	hook.advance(5000);
+	assert.equal(session.calls.sync, 0);
+	hook.render({ pauseSync: false });
+	assert.equal(hook.pendingTimers(), 1);
+	hook.advance(1500);
+	await flush();
+	hook.render({ pauseSync: false });
+	assert.equal(session.calls.sync, 1);
+	hook.appState('inactive');
+	assert.equal(session.calls.sync, 1);
+	hook.appState('active');
+	await flush();
+	assert.equal(session.calls.sync, 2);
+	hook.render({ pauseSync: true });
+	hook.appState('active');
+	assert.equal(
+		session.calls.sync,
+		2,
+		'Existing foreground callback must not capture stale pause',
+	);
+	hook.unmount();
+});
+
+test('hook does not schedule automatic sync while loading, failed, conflicted, signed out, or unavailable', () => {
+	for (const patch of [
+		{ loading: true },
+		{ loadError: 'Corrupt cache' },
+		{ conflict: { heads: [] } },
+		{ account: null },
+	]) {
+		const session = adapterSession();
+		const hook = hookHarness({}, { session, auth: availableAuth });
+		hook.render();
+		hook.mount();
+		session.emit(patch);
+		hook.render();
+		assert.equal(hook.pendingTimers(), 0, JSON.stringify(patch));
+		hook.unmount();
+	}
+	const session = adapterSession();
+	const hook = hookHarness({}, { session });
+	hook.render();
+	hook.mount();
+	hook.render();
+	hook.appState('active');
+	assert.equal(hook.pendingTimers(), 0);
+	assert.equal(session.calls.sync, 0);
+	hook.unmount();
+});
+
+test('hook surfaces background account storage failure and preserves data until a successful retry', async () => {
+	const account = { id: 'google-sub', email: 'person@example.com', name: 'Person' };
+	let fail = true;
+	let writes = 0;
+	const hook = hookHarness(
+		{ loadMoneyData: async () => initial() },
+		{
+			auth: { ...availableAuth, accessToken: async () => 'fake-access-token' },
+			drive: { listHeads: async () => ({ heads: [], nodes: [] }) },
+			cloudStorage: {
+				loadActiveAccount: async () => account,
+				loadAccountData: async () => ({
+					version: 1,
+					accountId: account.id,
+					data: initial(),
+					localRevision: null,
+					baseRevision: null,
+					dirty: false,
+					lastSyncedAt: null,
+					pendingParents: null,
+				}),
+				saveAccountData: async () => {
+					writes++;
+					if (fail) throw new Error('Private disk failure details');
+				},
+			},
+		},
+	);
+	hook.render();
+	hook.mount();
+	await flush();
+	const committed = hook.render().data;
+	hook.advance(1500);
+	await flush();
+	let current = hook.render();
+	assert.equal(writes, 1);
+	assert.match(current.syncError, /Could not save sync status on this phone/);
+	assert.doesNotMatch(current.syncError, /Private disk/);
+	assert.equal(current.data, committed);
+	assert.equal(current.saving, false);
+	assert.equal(current.syncing, false);
+	assert.equal(hook.pendingTimers(), 0);
+	hook.appState('active');
+	await flush();
+	assert.equal(writes, 2);
+	assert.match(hook.render().syncError, /Could not save sync status/);
+	fail = false;
+	assert.equal(await current.sync(), true);
+	current = hook.render();
+	assert.equal(writes, 3);
+	assert.equal(current.syncError, null);
+	assert.deepEqual(current.data, initial());
+	hook.unmount();
 });

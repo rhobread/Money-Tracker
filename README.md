@@ -1,11 +1,12 @@
 # Money Tracker
 
-A personal money tracker built with Expo and JavaScript. Track your current balance, recurring income, and payments in Indonesian rupiah (IDR). All tracking is manual and saved on the device.
+A personal money tracker built with Expo and JavaScript. Track your current balance, recurring income, and payments in Indonesian rupiah (IDR). Data saves on your device first, with optional Google sign-in and Google Drive sync.
 
 ## Requirements
 
 - A current Node.js LTS release and npm: https://nodejs.org/
-- Expo Go on your Android phone or iPhone, compatible with this project's Expo SDK 58.
+- For device-only testing: Expo Go compatible with this project's Expo SDK 58.
+- For Google sign-in: a native development build or APK and your own Google OAuth client IDs. Expo Go cannot run native Google sign-in.
 - Your computer and phone connected to the same Wi-Fi network for the default connection method.
 
 You do not need Android Studio or Xcode to run the app on a physical phone using Expo Go.
@@ -31,7 +32,7 @@ npm install
 ### 3. Start Expo
 
 ```bash
-npm start
+npm start -- --go
 ```
 
 Keep the terminal open while developing. Expo displays a QR code.
@@ -43,7 +44,7 @@ Keep the terminal open while developing. Expo displays a QR code.
 
 The first load may take a little time while Expo bundles the app. Changes to your code normally appear automatically through Fast Refresh.
 
-To stop the development server, press `Ctrl+C` in the terminal. To run it again later, use `npm start`; you do not need to reinstall dependencies each time.
+To stop the development server, press `Ctrl+C` in the terminal. To run it again later in Expo Go, use `npm start -- --go`; you do not need to reinstall dependencies each time. Use `npm start -- --dev-client` with a native development build instead.
 
 ## Use The App
 
@@ -87,11 +88,101 @@ Manually editing a money source sets its actual current balance. Later reversals
 
 Date fields accept real calendar dates from 1900 through 9999. Income and payment amounts must be zero or positive; the section determines whether money is incoming or outgoing.
 
+## Google Sign-In And Drive Sync
+
+### Cost And Storage
+
+Google currently provides standard Drive API use at no additional cost within its quotas. A personal money tracker uses very little quota. Your JSON snapshots count toward your Google account's storage; the standard free allowance is 15 GB shared with Drive, Gmail, and Photos. More storage can cost money, and API terms can change. No paid sign-in library, Firebase subscription, or app server is required.
+
+Official references: [Drive API usage limits and pricing](https://developers.google.com/workspace/drive/api/guides/limits), [Google account storage](https://support.google.com/drive/answer/6374270), and [private app data](https://developers.google.com/workspace/drive/api/guides/appdata). Pricing was checked on November 12, 2026. EAS cloud builds have separate free-tier limits; building locally with Android Studio does not require an EAS subscription. Sideloading an APK does not require a paid Play Store developer account.
+
+Drive files live in its **private app-data folder**, not ordinary My Drive folders. The app requests only `drive.appdata` in addition to normal Google identity access, not permission to read all your files. Data travels over HTTPS, but this app does not add its own encryption to JSON backups. History is retained as immutable snapshots and uses storage; automatic history cleanup is not implemented.
+
+### How It Behaves
+
+1. Open **Google Drive** on the dashboard and select **Sign in with Google**.
+2. If that account already has Drive data, it is restored automatically, unless local edits conflict with it.
+3. If the account is new, it starts empty. **Copy device-only data** explicitly copies your existing balances and trackers to that account. The original device-only copy is kept.
+4. Changes save locally first. Sync runs after changes, on account activation, and when the app returns to the foreground. Use **Sync now** to retry after going online.
+5. Offline changes stay queued in that account's local cache. Network errors never replace data with an empty dataset.
+6. If two devices changed the same starting version, choose **Use this device version** or a specific **Drive version**. This is a whole-data choice, not a merge. Choosing a Drive version replaces unsynced local edits only after confirmation. Unresolved conflicts remain blocked after restarting or switching accounts; **Sync now** can check whether another device already resolved them.
+7. **Sign out / use device-only data** returns to your separate device-only dataset. It does not delete account caches, queued edits, or Drive files. Signing into another account never copies the previous account's data into it.
+
+Sync is paused while a money editor or delete confirmation is open, so a downloaded version cannot overwrite an unfinished form. Closing the form allows queued sync to resume. Money editing is briefly disabled while a sync/account operation is running. Conflicts must be resolved, or you can sign out, before editing account data again. Sync does not run while the app is closed, and reconnecting while it stays in the foreground may require **Sync now** or returning to the app.
+
+Google account details are display metadata, not authorization. Access tokens are obtained/refreshed through the native SDK and the current Google identity is checked before Drive requests. Tokens and client secrets are not saved in the money JSON or AsyncStorage. Cached account data is still unencrypted local app storage; clearing/uninstalling can erase unsynced changes.
+
+### One-Time Google Setup
+
+This repository cannot supply credentials for your Google account. Complete these steps once before testing sign-in. Device-only mode works without them.
+
+**1. Create a Google Cloud project and enable Drive**
+
+Open [Google Cloud Console](https://console.cloud.google.com/), create/select a project, and enable **Google Drive API** in the API Library. Firebase is not needed.
+
+**2. Configure Google Auth Platform**
+
+Set up Branding, Audience, and Data Access (the OAuth consent screen). For personal use, use External/Testing and add your own Google email as a test user. Include the `https://www.googleapis.com/auth/drive.appdata` scope along with the normal sign-in identity scopes. Testing mode has user restrictions and can require reauthorization after grants expire; sign in again if the app requests it. Publishing to a broader audience can require additional Google review or branding setup.
+
+**3. Create a Web application OAuth client**
+
+Under Clients/Credentials, create a **Web application** client in that project. Its public client ID goes in the project-root `.env`:
+
+```dotenv
+EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com
+```
+
+Use the actual ID Google issues, not the placeholder. This is a public identifier included in the app, **not a client secret**. Do not put client secrets, access tokens, or service-account keys in the app. `.env.example` lists the supported variables and `.env` is gitignored.
+
+**4. Register the Android package and signing SHA-1**
+
+Create an **Android OAuth client** in the same project with package **`com.moneytracker.app`** and the SHA-1 of the certificate that actually signs your installed build. The Android client ID itself is not used as `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`.
+
+For EAS APKs, inspect the project's signing credentials with `npx eas-cli@latest credentials --platform android`. For local debug builds, first generate native files with `npx expo prebuild --platform android`, then inspect the generated app's debug keystore (if that is the keystore used by its Gradle configuration):
+
+```powershell
+keytool -list -v -keystore "android/app/debug.keystore" -alias androiddebugkey -storepass android -keypass android
+```
+
+Register each certificate you actually use: local debug, EAS preview/release, and Play App Signing can all differ. A package/SHA-1 mismatch prevents sign-in. With the explicit Web client ID, this Android setup uses native autolinking and does not need Firebase or `google-services.json`.
+
+**5. Build and install the native app**
+
+For local Android development, install Android Studio, an Android SDK, and a compatible JDK. Then:
+
+```bash
+npx expo run:android
+```
+
+This generates and installs a development build. Afterward, start the development server with `npm start -- --dev-client`. Generated `android/` and `ios/` folders are gitignored; keep configuration in `app.json` / `app.config.js`.
+
+Alternatively, create an EAS account, link this project using the EAS CLI setup, and build a standalone APK using the included profile:
+
+```bash
+npx eas-cli@latest build --platform android --profile preview
+```
+
+Set `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` in the EAS project's **preview** environment before building. Local `.env` files are gitignored and should not be assumed to reach a cloud build. Use the **development** EAS environment for the development profile. These public IDs can be plaintext environment values, but never embed a client secret.
+
+Install the resulting APK on the phone. A standalone APK does not require Expo Go or the development server. Internet is needed for sign-in and sync, but cached account/device data works offline.
+
+**Optional iOS setup**
+
+Create an iOS OAuth client in the same project for bundle ID `com.moneytracker.app`. Set `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` as well as the Web ID. `app.config.js` registers the reversed iOS URL scheme and native sign-in plugin when the iOS ID is configured. Rebuild on macOS/EAS after configuration changes. iOS native sign-in still needs device testing; Apple build/distribution requirements and fees are separate from Google's API pricing.
+
+Expo SDK 58 builds adopting the UIKit scene lifecycle also need OAuth URL forwarding to `GIDSignIn` in `SceneDelegate`, including cold-launch URLs. Follow the library's [iOS redirect forwarding guide](https://react-native-nitro-google-sign-in.github.io/docs/setup/ios#appdelegate-handle-oauth-redirect-urls) before using iOS sign-in. This repository configures the URL scheme and pods, but does not generate a custom SceneDelegate forwarder. The primary setup above targets Android APKs; a successful iOS JavaScript export is not proof of working native iOS authentication.
+
+**6. Test first sign-in and restore**
+
+Open **Google Drive**, sign in, and grant private app-data access. For a new account, confirm **Copy device-only data** if you want your existing data uploaded. Wait for a successful sync before uninstalling or moving devices. On another correctly configured build using the same Google Cloud project, sign into the same Google account to restore the Drive version.
+
+OAuth IDs are compiled into JavaScript at build time. Restart Metro after local `.env` changes, and rebuild a standalone APK for those changes to take effect. Live sign-in has not been verified in this repository environment because no real OAuth credentials or device were supplied.
+
 ## Run In An Emulator
 
 ### Android
 
-Install Android Studio, configure an Android Virtual Device, and start the emulator. Then run:
+Install Android Studio, configure an Android Virtual Device, and start the emulator. For the native app, first install a build using `npx expo run:android`. Once installed, run:
 
 ```bash
 npm run android
@@ -99,7 +190,7 @@ npm run android
 
 ### iOS
 
-The iOS Simulator requires macOS and Xcode. On a Mac with the simulator configured, run:
+The iOS Simulator requires macOS and Xcode. On a Mac, install the native development build using `npx expo run:ios`, then run:
 
 ```bash
 npm run ios
@@ -118,10 +209,12 @@ Windows cannot run the iOS Simulator, but you can use a physical iPhone with Exp
 If the local connection still fails, stop Expo and try tunnel mode:
 
 ```bash
-npm start -- --tunnel
+npm start -- --go --tunnel
 ```
 
 Follow any Expo prompt to install its tunnel dependency, then scan the new QR code. Tunnel mode requires internet access and may be slower.
+
+When using a native development build, replace `--go` with `--dev-client`.
 
 ### Expo Go reports an incompatible SDK
 
@@ -132,7 +225,7 @@ This project uses Expo SDK 58. Update Expo Go and check that it supports this SD
 Stop the server and restart with a cleared bundler cache:
 
 ```bash
-npm start -- --clear
+npm start -- --go --clear
 ```
 
 ### PowerShell blocks npm.ps1
@@ -146,19 +239,20 @@ npm.cmd start
 
 ## Local Data Storage
 
-- The app saves one JSON object using AsyncStorage under `@money-tracker/data`, with an outer schema version of 1, wallet version 3, and trackers version 2.
+- Device-only mode saves one JSON object using AsyncStorage under `@money-tracker/data`, with an outer schema version of 1, wallet version 3, and trackers version 2.
+- Signed-in accounts use separate envelopes at `@money-tracker/account/<encoded Google subject ID>`, with the complete finance dataset, dirty flag, revision ancestry, and last sync date. `@money-tracker/active-account` stores only the selected profile; no tokens.
 - Balances, source selections, paid status, and recorded balance changes are saved together in one write. A failed save leaves both the balances and entries unchanged.
 - Older `@money-tracker/wallet` and `@money-tracker/trackers` keys are read only if the combined key is absent. They remain untouched as migration backups. An invalid combined record never falls back to those potentially stale backups.
 - Recurring entries are calculated when you view a year; only schedules and entries you explicitly change are stored. No background task is needed to generate them.
 - The wallet contains `sources` (each with a stable `id`, `name`, and integer `amountMinor`), currency fixed to `IDR`, `updatedAt`, and `version`. Amounts remain in hundredths of a rupiah. No separate total is stored.
 - Each tracker has `defaultSourceId`; saved entries can override `sourceId`. A paid entry's internal `applied` record remembers its signed balance change so edits, unpaying, and deletion can correct or reverse it without double-counting.
 - Saving successfully updates both the stored data and the displayed balance.
-- Data persists between app launches. There is no account, backend, or app-managed cloud sync.
+- Data persists between app launches. Google sign-in and Drive sync are optional; no custom backend is required.
 - This is app-private storage, not a user-visible JSON file in your Downloads folder.
 - AsyncStorage is not encrypted. Clearing app data or uninstalling can delete your balance and trackers.
 - When testing in Expo Go, data lives in Expo Go's storage rather than a separately installed Money Tracker app.
 
-The balance functionality works without a backend. During development, Expo Go still needs access to the development server to load the app; this setup does not produce a standalone installable app.
+The balance functionality works without a backend. During development, Expo Go/dev clients need access to the development server to load JavaScript. The optional EAS preview profile produces an installable APK; a JavaScript export alone does not.
 
 ## Logo And App Icon
 
@@ -198,8 +292,15 @@ src/
   screens/BalanceScreen.js      Main dashboard
   screens/MoneySourcesScreen.js Bank/cash source list and editing
   screens/TrackerScreen.js      Income/payment lists and entries
+  screens/AccountScreen.js      Google sign-in, sync status and conflict choices
   hooks/useMoneyData.js         Shared money data and save lock
   storage/moneyStorage.js       Combined JSON persistence and migration
+  storage/cloudStorage.js       Per-account caches and active profile
+  services/cloudSession.js      Offline-first account and sync controller
+  services/cloudModel.js        Cloud/cache validation
+  services/driveStorage.js      Private Drive JSON snapshot API
+  services/googleAuth.js        Native sign-in and account verification
+  config/google.js             Public OAuth IDs and runtime detection
   utils/finance.js              Linked balance updates and reversals
   utils/money.js                Amount parsing and balance validation
   utils/trackers.js             Dates, recurrence and tracker validation
@@ -209,6 +310,11 @@ tests/finance.test.js         Linked balances, reversals and source validation
 tests/trackers.test.js        Recurrence and tracker validation tests
 tests/moneyStorage.test.js    Combined persistence, migration and failure protection
 tests/trackerUi.test.js       Dashboard navigation and entry update handlers
+tests/cloudSession.test.js    Account isolation, offline sync and conflict safety
+tests/cloudStorage.test.js    Per-account envelope validation
+tests/driveStorage.test.js    Drive requests, revision graphs and error handling
+tests/googleAuth.test.js      Google identity, permissions and sanitized errors
+tests/appConfig.test.js       Native OAuth configuration
 ```
 
 ## Development Checks
