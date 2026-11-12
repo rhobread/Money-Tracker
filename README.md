@@ -149,11 +149,35 @@ npm.cmd start
 
 The balance functionality works without a backend. During development, Expo Go still needs access to the development server to load the app; this setup does not produce a standalone installable app.
 
+## Logo And App Icon
+
+Put app images in `assets/`. The included logo is a simple wallet and coin in the app's green and lime colors.
+
+| File | Purpose |
+| --- | --- |
+| `assets/logo.svg` | Editable vector source, with a transparent background. |
+| `assets/icon.png` | Generated 1024 x 1024 app icon with a solid green background. |
+| `assets/adaptive-icon.png` | Generated transparent foreground for Android launcher icons. |
+
+After editing `assets/logo.svg`, regenerate the PNG icons:
+
+```bash
+npm run icons:generate
+```
+
+The renderer is a development-only dependency; it is not included in the mobile app. Keep the SVG canvas square and the main design centered so Android launcher masks do not cut it off.
+
+If you make your own PNG instead, replace `assets/icon.png` with a square 1024 x 1024 PNG. Android also uses `assets/adaptive-icon.png`; replace that with a transparent foreground version with generous padding. Do not run the generator afterward unless you want to overwrite those PNGs from the SVG. Image paths and the Android icon background color are configured in `app.json`.
+
+Launcher icon changes require a new native APK/app build. Expo Go's own installed launcher icon does not change.
+
 ## Project Structure
 
 ```text
 App.js                         App entry component
 index.js                       Expo entry registration
+assets/                        Logo source and generated app icons
+scripts/generate-icons.js      SVG-to-PNG icon generation
 src/
   components/SourceEditor.js    Balance source editing
   components/TrackerForm.js     Shared tracker form and fields

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+	<title>Money Tracker wallet and coin</title>
+	<rect x="350" y="326" width="316" height="198" rx="28" transform="rotate(-12 508 425)" fill="#F5F3ED" />
+	<circle cx="610" cy="354" r="96" fill="#D5ED9C" stroke="#244B3B" stroke-width="14" />
+	<circle cx="610" cy="354" r="58" fill="none" stroke="#244B3B" stroke-width="12" />
+	<path d="M610 324v60" fill="none" stroke="#244B3B" stroke-width="16" stroke-linecap="round" />
+	<rect x="250" y="420" width="524" height="312" rx="58" fill="#D5ED9C" />
+	<path d="M294 468h360" fill="none" stroke="#244B3B" stroke-width="12" stroke-linecap="round" />
+	<rect x="610" y="506" width="164" height="126" rx="30" fill="#244B3B" stroke="#D5ED9C" stroke-width="12" />
+	<circle cx="658" cy="569" r="14" fill="#D5ED9C" />
+</svg>
