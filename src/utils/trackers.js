@@ -59,17 +59,48 @@ function requireAmount(value) {
 	return value;
 }
 
-function validateEntry(value) {
+function sourceIdField(value, field) {
+	if (!Object.prototype.hasOwnProperty.call(value, field)) return null;
+	const id = value[field];
+	if (id !== null && (typeof id !== 'string' || !id.trim())) {
+		throw new Error('Money source must be a source ID or null.');
+	}
+	return id;
+}
+
+function validateEntry(value, kind) {
 	if (!isRecord(value)) throw new Error('Saved entry must be an object.');
 	const dueDate = requireDate(value.dueDate, 'Due date');
 	if (typeof value.paid !== 'boolean') throw new Error('Paid must be true or false.');
 	if (value.paid) requireDate(value.paidDate, 'Paid date');
 	else if (value.paidDate !== null) throw new Error('An unpaid entry must have no paid date.');
+	const amountMinor = requireAmount(value.amountMinor);
+	const sourceId = sourceIdField(value, 'sourceId');
+	let applied = null;
+	if (Object.prototype.hasOwnProperty.call(value, 'applied') && value.applied !== null) {
+		const snapshot = value.applied;
+		if (
+			!value.paid ||
+			!isRecord(snapshot) ||
+			typeof snapshot.sourceId !== 'string' ||
+			!snapshot.sourceId.trim() ||
+			sourceId !== snapshot.sourceId ||
+			!Number.isSafeInteger(snapshot.amountMinor) ||
+			snapshot.amountMinor !== (kind === 'income' ? amountMinor : -amountMinor)
+		) {
+			throw new Error(
+				'Applied balance must match the paid entry amount, kind and money source.',
+			);
+		}
+		applied = { sourceId: snapshot.sourceId, amountMinor: snapshot.amountMinor };
+	}
 	return {
 		dueDate,
 		paid: value.paid,
 		paidDate: value.paidDate,
-		amountMinor: requireAmount(value.amountMinor),
+		amountMinor,
+		sourceId,
+		applied,
 	};
 }
 
@@ -89,7 +120,7 @@ function validateTracker(value) {
 	const entries = {};
 	for (const [key, entry] of Object.entries(value.entries)) {
 		requireDate(key, 'Scheduled date');
-		entries[key] = validateEntry(entry);
+		entries[key] = validateEntry(entry, value.kind);
 	}
 	return {
 		id: value.id.trim(),
@@ -98,22 +129,40 @@ function validateTracker(value) {
 		amountMinor: requireAmount(value.amountMinor),
 		frequency: value.frequency,
 		startDate,
+		defaultSourceId: sourceIdField(value, 'defaultSourceId'),
 		entries,
 	};
 }
 
 function validateTrackersData(value) {
-	if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.items)) {
-		throw new Error('Tracker data must contain version 1 and an items list.');
+	if (!isRecord(value) || ![1, 2].includes(value.version) || !Array.isArray(value.items)) {
+		throw new Error('Tracker data must contain version 1 or 2 and an items list.');
 	}
 	const ids = new Set();
 	const items = value.items.map((item) => {
-		const tracker = validateTracker(item);
+		let tracker = validateTracker(item);
+		if (value.version === 1) {
+			// Shipped history is descriptive only; migration must never post it to balances.
+			tracker = {
+				...tracker,
+				defaultSourceId: null,
+				entries: Object.fromEntries(
+					Object.entries(tracker.entries).map(([key, entry]) => [
+						key,
+						{ ...entry, sourceId: null, applied: null },
+					]),
+				),
+			};
+		}
 		if (ids.has(tracker.id)) throw new Error('Tracker IDs must be unique.');
 		ids.add(tracker.id);
 		return tracker;
 	});
-	return { version: 1, items };
+	return { version: 2, items };
+}
+
+function effectiveSourceId(tracker, entry) {
+	return entry.sourceId ?? tracker.defaultSourceId;
 }
 
 function occurrencesForYear(value, year) {
@@ -162,6 +211,8 @@ function occurrencesForYear(value, year) {
 			paid: false,
 			paidDate: null,
 			amountMinor: tracker.amountMinor,
+			sourceId: null,
+			applied: null,
 		}),
 	})).sort((a, b) =>
 		a.dueDate < b.dueDate
@@ -198,6 +249,7 @@ module.exports = {
 	formatDate,
 	validateTracker,
 	validateTrackersData,
+	effectiveSourceId,
 	occurrencesForYear,
 	setOccurrence,
 	createTrackerId,

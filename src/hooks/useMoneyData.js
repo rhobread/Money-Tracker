@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { loadTrackers, saveTrackers } from '../storage/trackerStorage';
-import { validateTrackersData } from '../utils/trackers';
+import { loadMoneyData, saveMoneyData } from '../storage/moneyStorage';
+import {
+	updateMoneySources,
+	saveRecurringItem,
+	saveRecurringEntry,
+	deleteRecurringItem,
+} from '../utils/finance';
 
-export function useTrackers() {
-	const [data, setData] = useState({ version: 1, items: [] });
+export function useMoneyData() {
+	const [data, setData] = useState(null);
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState(null);
 	const [saving, setSaving] = useState(false);
+	const dataRef = useRef(null);
 	const loadedRef = useRef(false);
 	const loadingRef = useRef(false);
 	const savingRef = useRef(false);
@@ -18,13 +24,14 @@ export function useTrackers() {
 		setLoading(true);
 		setLoadError(null);
 		try {
-			const next = await loadTrackers();
+			const next = await loadMoneyData();
+			dataRef.current = next;
 			setData(next);
 			loadedRef.current = true;
 			return true;
 		} catch {
 			setLoadError(
-				'Could not load your trackers. Stored data has not been changed. Try again.',
+				'Could not load your money data. Stored data has not been changed. Try again.',
 			);
 			return false;
 		} finally {
@@ -37,13 +44,14 @@ export function useTrackers() {
 		reload();
 	}, []);
 
-	async function updateItems(nextItems) {
+	async function commit(action, ...args) {
 		if (!loadedRef.current || loadingRef.current || savingRef.current) return false;
 		savingRef.current = true;
 		setSaving(true);
 		try {
-			const next = validateTrackersData({ version: 1, items: nextItems });
-			await saveTrackers(next);
+			const next = action(dataRef.current, ...args);
+			await saveMoneyData(next);
+			dataRef.current = next;
 			setData(next);
 			return true;
 		} finally {
@@ -52,5 +60,15 @@ export function useTrackers() {
 		}
 	}
 
-	return { data, loading, loadError, saving, reload, updateItems };
+	return {
+		data,
+		loading,
+		loadError,
+		saving,
+		reload,
+		updateSources: (sources) => commit(updateMoneySources, sources),
+		saveTracker: (tracker) => commit(saveRecurringItem, tracker),
+		saveEntry: (trackerId, key, entry) => commit(saveRecurringEntry, trackerId, key, entry),
+		deleteTracker: (id) => commit(deleteRecurringItem, id),
+	};
 }

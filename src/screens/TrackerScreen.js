@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-	ActivityIndicator,
 	Alert,
 	BackHandler,
 	FlatList,
@@ -18,7 +17,7 @@ import {
 	createTrackerId,
 	formatDate,
 	occurrencesForYear,
-	setOccurrence,
+	effectiveSourceId,
 	todayDate,
 } from '../utils/trackers';
 import { formatMoney } from '../utils/money';
@@ -29,11 +28,11 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 export function TrackerScreen({
 	kind,
 	data,
-	loading,
-	loadError,
+	sources,
 	saving,
-	reload,
-	updateItems,
+	saveTracker: onSaveTracker,
+	saveEntry: onSaveEntry,
+	deleteTracker: onDeleteTracker,
 	onBack,
 }) {
 	const [selectedId, setSelectedId] = useState(null);
@@ -46,6 +45,7 @@ export function TrackerScreen({
 	const items = data?.items.filter((item) => item.kind === kind) ?? [];
 	const title = kind === 'income' ? 'Source of Income' : 'Payments';
 	const today = todayDate();
+	const sourceName = (id) => sources.find((source) => source.id === id)?.name ?? 'Not selected';
 	const occurrences = selected
 		? occurrencesForYear(selected, year).filter(
 				(entry) =>
@@ -72,10 +72,7 @@ export function TrackerScreen({
 
 	async function saveTracker(value) {
 		const next = { ...value, id: editor.tracker?.id ?? createTrackerId(data.items) };
-		const updated = editor.tracker
-			? data.items.map((item) => (item.id === next.id ? next : item))
-			: [...data.items, next];
-		const saved = await updateItems(updated);
+		const saved = await onSaveTracker(next);
 		if (saved) {
 			setError(null);
 			setSelectedId(next.id);
@@ -92,16 +89,17 @@ export function TrackerScreen({
 	}
 
 	async function saveEntry(occurrence, entry) {
-		const next = setOccurrence(selected, occurrence.key, entry);
-		const saved = await updateItems(
-			data.items.map((item) => (item.id === next.id ? next : item)),
-		);
+		const saved = await onSaveEntry(selected.id, occurrence.key, entry);
 		if (saved) setError(null);
 		return saved;
 	}
 
 	async function togglePaid(occurrence) {
 		if (saving || acting.current) return;
+		if (!occurrence.paid && !effectiveSourceId(selected, occurrence)) {
+			setEditor({ occurrence, initialPaid: true });
+			return;
+		}
 		acting.current = true;
 		try {
 			const saved = await saveEntry(occurrence, {
@@ -109,6 +107,7 @@ export function TrackerScreen({
 				amountMinor: occurrence.amountMinor,
 				paid: !occurrence.paid,
 				paidDate: occurrence.paid ? null : todayDate(),
+				sourceId: occurrence.sourceId,
 			});
 			if (!saved) setError('Could not update entry. Try again.');
 		} catch (saveError) {
@@ -123,7 +122,7 @@ export function TrackerScreen({
 		acting.current = true;
 		Alert.alert(
 			'Delete item?',
-			`Delete "${selected.name}" and all its saved entries?`,
+			`Delete "${selected.name}" and all its saved entries? Balance changes from its paid entries will also be reversed.`,
 			[
 				{
 					text: 'Cancel',
@@ -137,11 +136,7 @@ export function TrackerScreen({
 					style: 'destructive',
 					onPress: async () => {
 						try {
-							if (
-								await updateItems(
-									data.items.filter((item) => item.id !== selected.id),
-								)
-							) {
+							if (await onDeleteTracker(selected.id)) {
 								setSelectedId(null);
 								setError(null);
 							}
@@ -178,10 +173,12 @@ export function TrackerScreen({
 				<Text style={styles.link}>{selected ? `< ${title}` : '< Balance'}</Text>
 			</Pressable>
 			<Text style={styles.title}>{selected ? selected.name : title}</Text>
-			{!selected && !loading && !loadError && (
+			{!selected && (
 				<>
 					<Text style={styles.body}>
-						Manual tracking only. Marking paid does not change your balance.
+						{kind === 'income'
+							? 'Paid income adds to its money source.'
+							: 'Paid payments subtract from their money source.'}
 					</Text>
 					<Pressable
 						accessibilityRole="button"
@@ -200,6 +197,9 @@ export function TrackerScreen({
 					<Text style={styles.amount}>{formatMoney(selected.amountMinor)}</Text>
 					<Text style={styles.frequency}>{selected.frequency}</Text>
 					<Text style={styles.body}>First due: {formatDate(selected.startDate)}</Text>
+					<Text style={styles.body}>
+						Default money source: {sourceName(selected.defaultSourceId)}
+					</Text>
 					<View style={styles.actions}>
 						<Pressable
 							accessibilityRole="button"
@@ -273,7 +273,7 @@ export function TrackerScreen({
 					)}
 					<Text style={styles.hint}>
 						Tap Paid to use today's date. Edit an entry to change its due date, amount,
-						or paid date.
+						paid date, or money source. Unchecking Paid reverses its balance change.
 					</Text>
 				</>
 			)}
@@ -281,17 +281,6 @@ export function TrackerScreen({
 				<Text accessibilityRole="alert" style={styles.error}>
 					{error}
 				</Text>
-			)}
-			{loading && <ActivityIndicator color={colors.green} style={styles.loading} />}
-			{loadError && (
-				<>
-					<Text accessibilityRole="alert" style={styles.error}>
-						{loadError}
-					</Text>
-					<Pressable accessibilityRole="button" onPress={reload} style={styles.button}>
-						<Text style={styles.buttonText}>Try again</Text>
-					</Pressable>
-				</>
 			)}
 		</>
 	);
@@ -302,6 +291,9 @@ export function TrackerScreen({
 			<View style={styles.card}>
 				<Text style={styles.entryAmount}>{formatMoney(item.amountMinor)}</Text>
 				<Text style={styles.body}>Due: {formatDate(item.dueDate)}</Text>
+				<Text style={styles.body}>
+					Money source: {sourceName(effectiveSourceId(selected, item))}
+				</Text>
 				{item.dueDate !== item.scheduledDate && (
 					<Text style={styles.hint}>Scheduled: {formatDate(item.scheduledDate)}</Text>
 				)}
@@ -324,6 +316,12 @@ export function TrackerScreen({
 					</Pressable>
 				</View>
 				{item.paid && <Text style={styles.body}>Paid: {formatDate(item.paidDate)}</Text>}
+				{item.paid && item.applied === null && (
+					<Text style={styles.hint}>
+						Older paid entry. Not applied to your balance; uncheck and mark paid again
+						to include it.
+					</Text>
+				)}
 			</View>
 		);
 	}
@@ -333,20 +331,18 @@ export function TrackerScreen({
 			<FlatList
 				key={selected ? `entries-${selected.id}` : 'items'}
 				contentContainerStyle={styles.content}
-				data={loading || loadError ? [] : selected ? occurrences : items}
+				data={selected ? occurrences : items}
 				extraData={{ saving, year, month, today }}
 				keyExtractor={(item) => (selected ? item.key : item.id)}
 				ListHeaderComponent={header}
 				ListEmptyComponent={
-					!loading && !loadError ? (
-						<Text style={styles.empty}>
-							{selected
-								? 'No entries for this period.'
-								: kind === 'income'
-									? 'No income added yet.'
-									: 'No payments added yet.'}
-						</Text>
-					) : null
+					<Text style={styles.empty}>
+						{selected
+							? 'No entries for this period.'
+							: kind === 'income'
+								? 'No income added yet.'
+								: 'No payments added yet.'}
+					</Text>
 				}
 				renderItem={
 					selected
@@ -367,6 +363,9 @@ export function TrackerScreen({
 										{formatMoney(item.amountMinor)}
 									</Text>
 									<Text style={styles.frequency}>{item.frequency}</Text>
+									<Text style={styles.body}>
+										Default: {sourceName(item.defaultSourceId)}
+									</Text>
 								</Pressable>
 							)
 				}
@@ -375,6 +374,9 @@ export function TrackerScreen({
 				(editor.occurrence ? (
 					<OccurrenceEditor
 						occurrence={editor.occurrence}
+						sources={sources}
+						defaultSourceId={selected.defaultSourceId}
+						initialPaid={editor.initialPaid}
 						saving={saving}
 						onSave={(value) => saveEntry(editor.occurrence, value)}
 						onClose={() => setEditor(null)}
@@ -383,6 +385,7 @@ export function TrackerScreen({
 					<TrackerEditor
 						tracker={editor.tracker}
 						kind={kind}
+						sources={sources}
 						saving={saving}
 						onSave={saveTracker}
 						onClose={() => setEditor(null)}
@@ -471,6 +474,5 @@ const styles = StyleSheet.create({
 	monthText: { color: colors.green, fontSize: 13, fontWeight: '600' },
 	selectedMonthText: { color: colors.paper },
 	empty: { color: colors.muted, fontSize: 14, marginVertical: 24 },
-	loading: { marginVertical: 24 },
 	pressed: { opacity: 0.75 },
 });

@@ -2,6 +2,13 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { transformFileSync } = require('@babel/core');
+const {
+	validateFinanceData,
+	saveRecurringEntry,
+	saveRecurringItem,
+	deleteRecurringItem,
+	updateMoneySources,
+} = require('../src/utils/finance');
 
 // Exercise screen handlers without a simulator; native components stay as plain elements.
 function screen(modulePath, modules) {
@@ -43,6 +50,7 @@ function screen(modulePath, modules) {
 	native.StyleSheet = { create: (value) => value };
 	native.Alert = { alert() {} };
 	native.BackHandler = { addEventListener: () => ({ remove() {} }) };
+	Object.assign(native, modules['react-native']);
 	const exports = {};
 	const code = transformFileSync(require.resolve(modulePath), {
 		babelrc: false,
@@ -87,16 +95,17 @@ function text(tree) {
 	return tree ? text(tree.props?.children) : '';
 }
 
-test('dashboard keeps sources hidden and opens separate income and payment screens', () => {
+test('dashboard opens separate money sources, income, and payment screens', () => {
 	const render = screen('../src/screens/BalanceScreen.js', {
-		'../hooks/useWallet': {
-			useWallet: () => ({ wallet: { sources: [] }, loading: false, saving: false }),
-		},
-		'../hooks/useTrackers': {
-			useTrackers: () => ({ data: { version: 1, items: [] }, loading: false }),
+		'../hooks/useMoneyData': {
+			useMoneyData: () => ({
+				data: { wallet: { sources: [] }, trackers: { version: 2, items: [] } },
+				loading: false,
+				saving: false,
+			}),
 		},
 		'./TrackerScreen': { TrackerScreen: 'TrackerScreen' },
-		'../components/SourceEditor': { SourceEditor: 'SourceEditor' },
+		'./MoneySourcesScreen': { MoneySourcesScreen: 'MoneySourcesScreen' },
 	});
 	let tree = render();
 	assert.doesNotMatch(text(tree), /Add source/);
@@ -106,7 +115,10 @@ test('dashboard keeps sources hidden and opens separate income and payment scree
 		.find((node) => node.props.accessibilityLabel === 'Current balance')
 		.props.onPress();
 	tree = render();
-	assert.match(text(tree), /Add source/);
+	assert.equal(tree.type, 'MoneySourcesScreen');
+	assert.doesNotMatch(text(tree), /Source of Income/);
+	tree.props.onBack();
+	tree = render();
 	nodes(tree)
 		.find((node) => node.type === 'Pressable' && text(node).includes('Source of Income'))
 		.props.onPress();
@@ -121,11 +133,20 @@ test('dashboard keeps sources hidden and opens separate income and payment scree
 	assert.equal(render().props.kind, 'payment');
 });
 
-function trackerScreen(updateItems) {
-	const props = {
-		kind: 'income',
-		data: {
-			version: 1,
+function trackerScreen(saveEntryOverride, nativeOverrides = {}) {
+	let finance = validateFinanceData({
+		version: 1,
+		wallet: {
+			version: 3,
+			currency: 'IDR',
+			updatedAt: null,
+			sources: [
+				{ id: 'bank-a', name: 'Bank A', amountMinor: 200000000 },
+				{ id: 'bank-b', name: 'Bank B', amountMinor: 50000000 },
+			],
+		},
+		trackers: {
+			version: 2,
 			items: [
 				{
 					id: 'rent',
@@ -134,6 +155,7 @@ function trackerScreen(updateItems) {
 					amountMinor: 100000000,
 					frequency: 'monthly',
 					startDate: '2026-01-01',
+					defaultSourceId: 'bank-a',
 					entries: {},
 				},
 				{
@@ -143,29 +165,48 @@ function trackerScreen(updateItems) {
 					amountMinor: 100,
 					frequency: 'monthly',
 					startDate: '2026-01-01',
+					defaultSourceId: 'bank-a',
 					entries: {},
 				},
 			],
 		},
-		loading: false,
+	});
+	function commit(next) {
+		finance = next;
+		props.data = finance.trackers;
+		props.sources = finance.wallet.sources;
+		return true;
+	}
+	const props = {
+		kind: 'income',
+		data: finance.trackers,
+		sources: finance.wallet.sources,
 		saving: false,
-		updateItems,
+		saveEntry:
+			saveEntryOverride ??
+			(async (id, key, entry) => commit(saveRecurringEntry(finance, id, key, entry))),
+		saveTracker: async (tracker) => commit(saveRecurringItem(finance, tracker)),
+		deleteTracker: async (id) => commit(deleteRecurringItem(finance, id)),
 	};
 	const render = screen('../src/screens/TrackerScreen.js', {
+		'react-native': nativeOverrides,
 		'../components/TrackerForm': { PaidCheckbox: 'PaidCheckbox' },
 		'../components/TrackerEditor': { TrackerEditor: 'TrackerEditor' },
 		'../components/OccurrenceEditor': { OccurrenceEditor: 'OccurrenceEditor' },
 	});
 	const current = () => render(props);
 	const list = () => nodes(current()).find((node) => node.type === 'FlatList');
-	return { props, current, list };
+	return { props, current, list, getData: () => finance };
+}
+
+function openFirstItem(ui) {
+	const list = ui.list();
+	list.props.renderItem({ item: list.props.data[0] }).props.onPress();
+	return ui.list();
 }
 
 test('tracker screens filter by kind; paid toggle saves today and edit supports custom dates', async () => {
-	const ui = trackerScreen(async (items) => {
-		ui.props.data = { version: 1, items };
-		return true;
-	});
+	const ui = trackerScreen();
 	let list = ui.list();
 	assert.equal(list.props.data.length, 1);
 	assert.equal(list.props.data[0].name, 'Kontrakan Fatra');
@@ -184,6 +225,8 @@ test('tracker screens filter by kind; paid toggle saves today and edit supports 
 	let saved = ui.props.data.items[0].entries[occurrence.key];
 	assert.equal(saved.paid, true);
 	assert.equal(saved.paidDate, require('../src/utils/trackers').todayDate());
+	assert.equal(saved.sourceId, 'bank-a');
+	assert.equal(ui.props.sources[0].amountMinor, 300000000);
 	list = ui.list();
 	card = list.props.renderItem({ item: list.props.data[0] });
 	nodes(card)
@@ -193,6 +236,7 @@ test('tracker screens filter by kind; paid toggle saves today and edit supports 
 	await editor.props.onSave({ ...saved, dueDate: '2026-02-15', paidDate: '2026-02-16' });
 	saved = ui.props.data.items[0].entries[occurrence.key];
 	assert.equal(saved.dueDate, '2026-02-15');
+	assert.equal(ui.props.sources[0].amountMinor, 300000000);
 	assert.equal(saved.paidDate, '2026-02-16');
 	assert.equal(ui.props.data.items[1].id, 'bill');
 	editor.props.onClose();
@@ -207,6 +251,7 @@ test('tracker screens filter by kind; paid toggle saves today and edit supports 
 	assert.equal(saved.paid, false);
 	assert.equal(saved.paidDate, null);
 	assert.equal(saved.dueDate, '2026-02-15');
+	assert.equal(ui.props.sources[0].amountMinor, 200000000);
 });
 
 test('failed paid saves leave the entry unpaid and show an error', async () => {
@@ -224,8 +269,185 @@ test('failed paid saves leave the entry unpaid and show an error', async () => {
 	assert.match(text(ui.list().props.ListHeaderComponent), /Storage full/);
 });
 
+test('editing paid income moves only its amount to an overridden source', async () => {
+	const ui = trackerScreen();
+	let list = openFirstItem(ui);
+	const key = list.props.data[0].key;
+	await nodes(list.props.renderItem({ item: list.props.data[0] }))
+		.find((node) => node.type === 'PaidCheckbox')
+		.props.onPress();
+	list = ui.list();
+	nodes(list.props.renderItem({ item: list.props.data[0] }))
+		.find((node) => node.props.accessibilityLabel?.startsWith('Edit entry'))
+		.props.onPress();
+	const editor = nodes(ui.current()).find((node) => node.type === 'OccurrenceEditor');
+	assert.equal(editor.props.defaultSourceId, 'bank-a');
+	assert.equal(editor.props.sources.length, 2);
+	await editor.props.onSave({
+		...editor.props.occurrence,
+		sourceId: 'bank-b',
+		amountMinor: 150000000,
+	});
+	assert.equal(ui.props.sources[0].amountMinor, 200000000);
+	assert.equal(ui.props.sources[1].amountMinor, 200000000);
+	assert.equal(ui.props.data.items[0].defaultSourceId, 'bank-a');
+	editor.props.onClose();
+	list = ui.list();
+	const paid = list.props.data.find((entry) => entry.key === key);
+	assert.match(text(list.props.renderItem({ item: paid })), /Bank B/);
+	await nodes(list.props.renderItem({ item: paid }))
+		.find((node) => node.type === 'PaidCheckbox')
+		.props.onPress();
+	assert.equal(ui.props.sources[1].amountMinor, 50000000);
+});
+
+test('payment checkboxes subtract once and unchecking refunds the original source', async () => {
+	const ui = trackerScreen();
+	ui.props.kind = 'payment';
+	let list = openFirstItem(ui);
+	const occurrence = list.props.data[0];
+	await nodes(list.props.renderItem({ item: occurrence }))
+		.find((node) => node.type === 'PaidCheckbox')
+		.props.onPress();
+	assert.equal(ui.props.sources[0].amountMinor, 199999900);
+	await ui.props.saveTracker({ ...ui.props.data.items[1], defaultSourceId: 'bank-b' });
+	list = ui.list();
+	const paid = list.props.data.find((entry) => entry.key === occurrence.key);
+	await nodes(list.props.renderItem({ item: paid }))
+		.find((node) => node.type === 'PaidCheckbox')
+		.props.onPress();
+	assert.equal(ui.props.sources[0].amountMinor, 200000000);
+	assert.equal(ui.props.sources[1].amountMinor, 50000000);
+});
+
+test('marking paid without a default opens the editor to select a source', async () => {
+	const ui = trackerScreen();
+	ui.props.data.items[0].defaultSourceId = null;
+	const list = openFirstItem(ui);
+	await nodes(list.props.renderItem({ item: list.props.data[0] }))
+		.find((node) => node.type === 'PaidCheckbox')
+		.props.onPress();
+	const editor = nodes(ui.current()).find((node) => node.type === 'OccurrenceEditor');
+	assert.equal(editor.props.initialPaid, true);
+	assert.equal(ui.props.sources[0].amountMinor, 200000000);
+	assert.equal(list.props.data[0].paid, false);
+	await editor.props.onSave({
+		...editor.props.occurrence,
+		sourceId: 'bank-b',
+		paid: true,
+		paidDate: '2026-11-12',
+	});
+	assert.equal(ui.props.sources[1].amountMinor, 150000000);
+});
+
+test('tracker deletion warns about reversing paid balances and uses the linked delete action', async () => {
+	let confirmation;
+	const ui = trackerScreen(undefined, {
+		Alert: {
+			alert: (...args) => {
+				confirmation = args;
+			},
+		},
+	});
+	const list = openFirstItem(ui);
+	await nodes(list.props.renderItem({ item: list.props.data[0] }))
+		.find((node) => node.type === 'PaidCheckbox')
+		.props.onPress();
+	nodes(ui.list().props.ListHeaderComponent)
+		.find((node) => node.type === 'Pressable' && text(node) === 'Delete item')
+		.props.onPress();
+	assert.match(confirmation[1], /Balance changes.*reversed/);
+	await confirmation[2].find((button) => button.text === 'Delete').onPress();
+	assert.equal(ui.props.data.items.length, 1);
+	assert.equal(ui.props.sources[0].amountMinor, 200000000);
+});
+
+test('money sources screen edits actual balances and surfaces linked-source deletion errors', async () => {
+	const tracker = trackerScreen();
+	let finance = tracker.getData();
+	let confirmation;
+	let backs = 0;
+	const props = {
+		wallet: finance.wallet,
+		saving: false,
+		onBack: () => {
+			backs++;
+		},
+		updateSources: async (sources) => {
+			finance = updateMoneySources(finance, sources);
+			props.wallet = finance.wallet;
+			return true;
+		},
+	};
+	const render = screen('../src/screens/MoneySourcesScreen.js', {
+		'../components/SourceEditor': { SourceEditor: 'SourceEditor' },
+		'react-native': {
+			Alert: {
+				alert: (...args) => {
+					confirmation = args;
+				},
+			},
+		},
+	});
+	const current = () => render(props);
+	const list = () => nodes(current()).find((node) => node.type === 'FlatList');
+	nodes(list().props.ListHeaderComponent)
+		.find((node) => node.type === 'Pressable' && text(node) === 'Add source')
+		.props.onPress();
+	const editor = nodes(current()).find((node) => node.type === 'SourceEditor');
+	await editor.props.onSave({ name: 'Cash', amountMinor: 12300 });
+	editor.props.onClose();
+	assert.equal(props.wallet.sources.length, 3);
+	const bank = list().props.data[0];
+	nodes(list().props.renderItem({ item: bank }))
+		.find((node) => node.props.accessibilityLabel === 'Delete Bank A')
+		.props.onPress();
+	await confirmation[2].find((button) => button.text === 'Delete').onPress();
+	assert.equal(props.wallet.sources.length, 3);
+	assert.match(text(list().props.ListHeaderComponent), /Clear or change/);
+	nodes(list().props.ListHeaderComponent)
+		.find((node) => node.type === 'Pressable' && text(node) === '< Balance')
+		.props.onPress();
+	assert.equal(backs, 1);
+});
+
+test('tracker editor includes the selected default source when saving main settings', async () => {
+	let saved;
+	const render = screen('../src/components/TrackerEditor.js', {
+		'./TrackerForm': {
+			TrackerForm: 'TrackerForm',
+			TrackerField: 'TrackerField',
+			trackerFormStyles: {},
+		},
+		'./MoneySourcePicker': { MoneySourcePicker: 'MoneySourcePicker' },
+	});
+	const props = {
+		kind: 'income',
+		sources: [{ id: 'bank-a', name: 'Bank A' }],
+		saving: false,
+		onSave: async (tracker) => {
+			saved = tracker;
+			return true;
+		},
+	};
+	let tree = render(props);
+	nodes(tree)
+		.find((node) => node.props.label === 'Name')
+		.props.onChangeText('Salary');
+	nodes(tree)
+		.find((node) => node.props.label === 'Amount (IDR)')
+		.props.onChangeText('5800000');
+	nodes(tree)
+		.find((node) => node.type === 'MoneySourcePicker')
+		.props.onChange('bank-a');
+	tree = render(props);
+	await tree.props.onSave();
+	assert.equal(saved.defaultSourceId, 'bank-a');
+	assert.equal(saved.amountMinor, 580000000);
+});
+
 test('daily entries can be filtered by month and yearly entries ignore the old month filter', () => {
-	const ui = trackerScreen(async () => true);
+	const ui = trackerScreen();
 	ui.props.data.items[0].frequency = 'daily';
 	ui.props.data.items[0].startDate = '2020-01-01';
 	let list = ui.list();
@@ -308,6 +530,7 @@ test('entry editor exposes paid date only when paid and submits the manually ent
 			trackerFormStyles: {},
 		},
 		'../utils/trackers': { todayDate: () => '2026-11-12', formatDate: (value) => value },
+		'./MoneySourcePicker': { MoneySourcePicker: 'MoneySourcePicker' },
 	});
 	let saved;
 	const props = {
@@ -318,6 +541,8 @@ test('entry editor exposes paid date only when paid and submits the manually ent
 			paid: false,
 			paidDate: null,
 		},
+		sources: [{ id: 'bank-b', name: 'Bank B' }],
+		defaultSourceId: null,
 		saving: false,
 		onSave: async (value) => {
 			saved = value;
@@ -339,10 +564,14 @@ test('entry editor exposes paid date only when paid and submits the manually ent
 	nodes(tree)
 		.find((node) => node.props.label === 'Due date')
 		.props.onChangeText('2026-11-05');
+	nodes(tree)
+		.find((node) => node.type === 'MoneySourcePicker')
+		.props.onChange('bank-b');
 	tree = render(props);
 	await tree.props.onSave();
 	assert.equal(saved.paid, true);
 	assert.equal(saved.paidDate, '2026-11-10');
 	assert.equal(saved.dueDate, '2026-11-05');
 	assert.equal(saved.amountMinor, 580000000);
+	assert.equal(saved.sourceId, 'bank-b');
 });

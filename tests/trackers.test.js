@@ -11,6 +11,7 @@ const {
 	occurrencesForYear,
 	setOccurrence,
 	createTrackerId,
+	effectiveSourceId,
 } = require('../src/utils/trackers');
 
 const tracker = (changes = {}) => ({
@@ -21,6 +22,7 @@ const tracker = (changes = {}) => ({
 	frequency: 'monthly',
 	startDate: '2024-01-31',
 	entries: {},
+	defaultSourceId: null,
 	...changes,
 });
 const entry = (changes = {}) => ({
@@ -28,6 +30,8 @@ const entry = (changes = {}) => ({
 	paid: true,
 	paidDate: '2024-02-16',
 	amountMinor: 500,
+	sourceId: null,
+	applied: null,
 	...changes,
 });
 const keys = (value, year) => occurrencesForYear(value, year).map((item) => item.key);
@@ -242,11 +246,12 @@ test('entry validation requires real dates, explicit boolean paid and consistent
 });
 
 test('versioned validation enforces unique normalized IDs and full tracker validation', () => {
-	assert.deepEqual(validateTrackersData({ version: 1, items: [] }), { version: 1, items: [] });
+	assert.deepEqual(validateTrackersData({ version: 1, items: [] }), { version: 2, items: [] });
+	assert.deepEqual(validateTrackersData({ version: 2, items: [] }), { version: 2, items: [] });
 	for (const value of [
 		null,
 		{},
-		{ version: 2, items: [] },
+		{ version: 3, items: [] },
 		{ version: 1, items: {} },
 		{ version: 1, items: [tracker(), tracker({ id: ' rent ' })] },
 		{ version: 1, items: [tracker({ amountMinor: -1 })] },
@@ -269,6 +274,35 @@ test('locally generated IDs avoid collisions even when clock and random repeat',
 		Date.now = originalNow;
 		Math.random = originalRandom;
 	}
+});
+
+test('source fields normalize missing legacy values and generated occurrences inherit defaults', () => {
+	const legacy = tracker();
+	delete legacy.defaultSourceId;
+	const oldEntry = entry();
+	delete oldEntry.sourceId;
+	delete oldEntry.applied;
+	legacy.entries['2024-01-31'] = oldEntry;
+	const normalized = validateTracker(legacy);
+	assert.equal(normalized.defaultSourceId, null);
+	assert.equal(normalized.entries['2024-01-31'].sourceId, null);
+	assert.equal(normalized.entries['2024-01-31'].applied, null);
+	const generated = occurrencesForYear(tracker({ defaultSourceId: 'bank' }), 2024)[0];
+	assert.equal(generated.sourceId, null);
+	assert.equal(generated.applied, null);
+	assert.equal(effectiveSourceId({ defaultSourceId: 'bank' }, generated), 'bank');
+	assert.equal(effectiveSourceId({ defaultSourceId: 'bank' }, { sourceId: 'cash' }), 'cash');
+	for (const invalid of [undefined, '', ' ', 1, false, {}, []]) {
+		assert.throws(() => validateTracker(tracker({ defaultSourceId: invalid })), /Money source/);
+		assert.throws(
+			() => setOccurrence(tracker(), '2024-01-31', entry({ sourceId: invalid })),
+			/Money source/,
+		);
+	}
+	const migrated = validateTrackersData({ version: 1, items: [legacy] });
+	assert.equal(migrated.version, 2);
+	assert.deepEqual(migrated.items[0], normalized);
+	assert.deepEqual(legacy.entries['2024-01-31'], oldEntry);
 });
 
 test('calendar recurrence has no timezone or DST drift and today uses the local date', () => {

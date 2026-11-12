@@ -3,14 +3,16 @@ import { Pressable, Text, View } from 'react-native';
 import { TrackerField, TrackerForm, trackerFormStyles as styles } from './TrackerForm';
 import { parseAmount } from '../utils/money';
 import { FREQUENCIES, todayDate, validateTracker } from '../utils/trackers';
+import { MoneySourcePicker } from './MoneySourcePicker';
 
-export function TrackerEditor({ tracker, kind, saving, onSave, onClose }) {
+export function TrackerEditor({ tracker, kind, sources, saving, onSave, onClose }) {
 	const [name, setName] = useState(tracker?.name ?? '');
 	const [amount, setAmount] = useState(
 		tracker ? (tracker.amountMinor / 100).toFixed(2).replace('.', ',') : '',
 	);
 	const [frequency, setFrequency] = useState(tracker?.frequency ?? 'monthly');
 	const [startDate, setStartDate] = useState(tracker?.startDate ?? todayDate());
+	const [defaultSourceId, setDefaultSourceId] = useState(tracker?.defaultSourceId ?? null);
 
 	async function submit() {
 		const next = validateTracker({
@@ -20,6 +22,7 @@ export function TrackerEditor({ tracker, kind, saving, onSave, onClose }) {
 			amountMinor: parseAmount(amount),
 			frequency,
 			startDate,
+			defaultSourceId,
 			entries: tracker?.entries ?? {},
 		});
 		return onSave(next);
@@ -50,6 +53,19 @@ export function TrackerEditor({ tracker, kind, saving, onSave, onClose }) {
 				placeholder="1000000"
 				hint="No thousands separators. Use a comma or dot for decimals."
 			/>
+			<MoneySourcePicker
+				sources={sources}
+				value={defaultSourceId}
+				onChange={setDefaultSourceId}
+				disabled={saving}
+				label="Default money source"
+			/>
+			<Text style={styles.hint}>
+				{kind === 'income'
+					? 'Paid income adds money to this source.'
+					: 'Paid payments subtract money from this source.'}{' '}
+				You can choose a different source for each entry.
+			</Text>
 			<Text style={styles.label}>Repeat</Text>
 			<View style={styles.choices}>
 				{FREQUENCIES.map((value) => (
@@ -83,7 +99,7 @@ export function TrackerEditor({ tracker, kind, saving, onSave, onClose }) {
 			{tracker && (
 				<Text style={styles.hint}>
 					Changes apply to entries you haven't edited. Saved entries and paid dates are
-					kept.
+					kept. Paid entries keep the money source used when they were paid.
 				</Text>
 			)}
 		</TrackerForm>

@@ -8,14 +8,25 @@ import {
 } from './TrackerForm';
 import { parseAmount } from '../utils/money';
 import { formatDate, todayDate } from '../utils/trackers';
+import { MoneySourcePicker } from './MoneySourcePicker';
 
-export function OccurrenceEditor({ occurrence, saving, onSave, onClose }) {
+export function OccurrenceEditor({
+	occurrence,
+	sources,
+	defaultSourceId,
+	initialPaid,
+	saving,
+	onSave,
+	onClose,
+}) {
 	const [amount, setAmount] = useState(
 		(occurrence.amountMinor / 100).toFixed(2).replace('.', ','),
 	);
 	const [dueDate, setDueDate] = useState(occurrence.dueDate);
-	const [paid, setPaid] = useState(occurrence.paid);
+	const [paid, setPaid] = useState(initialPaid ?? occurrence.paid);
 	const [paidDate, setPaidDate] = useState(occurrence.paidDate ?? todayDate());
+	const [sourceId, setSourceId] = useState(occurrence.sourceId ?? null);
+	const defaultSource = sources.find((source) => source.id === defaultSourceId);
 
 	async function submit() {
 		return onSave({
@@ -23,6 +34,7 @@ export function OccurrenceEditor({ occurrence, saving, onSave, onClose }) {
 			dueDate,
 			paid,
 			paidDate: paid ? paidDate : null,
+			sourceId,
 		});
 	}
 
@@ -41,6 +53,25 @@ export function OccurrenceEditor({ occurrence, saving, onSave, onClose }) {
 				maxLength={20}
 				hint="No thousands separators."
 			/>
+			<MoneySourcePicker
+				sources={sources}
+				value={sourceId}
+				onChange={setSourceId}
+				disabled={saving}
+				emptyLabel={
+					defaultSource ? `Use default (${defaultSource.name})` : 'No default selected'
+				}
+			/>
+			<Text style={styles.hint}>
+				Saving a paid entry updates the selected source. Changing its amount or source
+				corrects the previous balance change.
+			</Text>
+			{occurrence.paid && occurrence.applied === null && (
+				<Text style={styles.hint}>
+					This older paid entry has not changed your balance. To include it, save it as
+					unpaid first, then mark it paid again.
+				</Text>
+			)}
 			<TrackerField
 				label="Due date"
 				value={dueDate}

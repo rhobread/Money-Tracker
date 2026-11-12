@@ -47,15 +47,15 @@ To stop the development server, press `Ctrl+C` in the terminal. To run it again 
 
 ## Use The App
 
-1. Tap the **Current balance** card to show your money sources. Tap it again to hide them.
+1. Tap the **Current balance** card to open the **Money Sources** screen. Use **< Balance** or Android's back button to return.
 2. Tap **Add source** and enter a name, such as Bank A or Cash.
 3. Enter its amount in IDR, without thousands separators. Up to two decimal places are supported with a comma or dot (for example, `1250,50`). Negative amounts are supported.
 4. Tap **Save**. Bank A with 1000 and Bank B with 2000 produce a current balance of 3000.
-5. Use **Edit** to change a source's name or amount. **Delete** asks for confirmation before removing it.
+5. Use **Edit** to set a source's current balance or change its name. **Delete** asks for confirmation; sources still selected by income/payment items or entries cannot be deleted until those references are cleared or moved.
 
 The initial balance is zero and IDR is the only currency. Balances use Indonesian formatting, for example `Rp 1.250,50`. Two decimal places are retained so existing fractional balances are not rounded away.
 
-Existing version 1 balances (USD, EUR, GBP, PHP, INR, CAD, or AUD) and version 2 IDR balances become one source named **My money**. Every integer hundredth, including zero and negative values, and the last-updated timestamp are preserved. Legacy currencies are relabeled as IDR without exchange-rate conversion. Migration happens in memory; the original stored JSON is untouched until a successful add, edit, or delete writes version 3. Invalid or unsupported data blocks editing and offers a retry without overwriting storage.
+Existing version 1 balances (USD, EUR, GBP, PHP, INR, CAD, or AUD) and version 2 IDR balances become one source named **My money**. Every integer hundredth, including zero and negative values, and the last-updated timestamp are preserved. Legacy currencies are relabeled as IDR without exchange-rate conversion. Migration happens in memory; the first successful save writes the combined money data described below, leaving the older keys untouched. Invalid or unsupported data blocks editing and offers a retry without overwriting storage.
 
 Names must contain 1 to 80 characters after trimming. Each amount must be smaller than 10 billion rupiah in magnitude. Totals must fit within JavaScript's safe integer range in hundredths. The balance is derived, not separately editable. Failed saves retain the previous list and total; repeated submissions are blocked while saving.
 
@@ -65,16 +65,25 @@ Below the balance are two cards: **Source of Income** for money you expect to re
 
 1. Tap **Add income** or **Add payment**.
 2. Enter a name and amount, such as Payment `5800000`, Kontrakan Fatra `1000000`, or Kontrakan Desi `12000000`.
-3. Choose **Daily**, **Weekly**, **Monthly**, or **Yearly**, and enter the **First due date** as `YYYY-MM-DD` (for example, `2026-11-01`).
+3. Select a **Default money source**, such as Bank A, then choose **Daily**, **Weekly**, **Monthly**, or **Yearly**, and enter the **First due date** as `YYYY-MM-DD` (for example, `2026-11-01`). **Choose per entry** leaves the default empty.
 4. Save. The item's detail screen automatically lists entries for that year. Use **Previous** and **Next** to browse other years, and the month buttons to narrow the list. Daily and weekly items initially open to the current month (or their first month if they haven't started yet).
-5. Tap the **Paid** checkbox to mark an entry paid using today's date. Uncheck it to mark it unpaid and clear the paid date.
-6. Tap an entry's **Edit** button to adjust its amount, due date, paid status, or paid date. Save to keep your changes.
+5. Tap **Paid** to mark an entry paid using today's date. Income increases its money source; payments decrease it. If no source is selected, an editor opens so you can choose one before saving.
+6. Tap an entry's **Edit** button to adjust its amount, due date, paid status, paid date, or money source. **Use default** inherits the item's default, or select another source for just that entry.
+7. Uncheck **Paid** to mark the entry unpaid, clear its paid date, and reverse its previous balance change.
 
-Income uses **Paid** to mean the money has been received. Unpaid entries past their due date show **Overdue**. There are no automatic payments, bank connections, notifications, or changes to the current balance. Update your balance sources separately when needed.
+Income uses **Paid** to mean the money has been received. Unpaid entries past their due date show **Overdue**. All actions are still manual: the app changes your local records only, not your actual bank accounts. There are no automatic payments, bank connections, or notifications.
+
+For example, paid income of Rp1.000.000 into Bank A adds Rp1.000.000 to its balance. A paid bill of Rp200.000 from Bank B subtracts Rp200.000 from Bank B. The front-page total updates automatically.
+
+Saving a paid entry again does not count it twice. Changing only its due/paid dates does not move money. Changing its amount adjusts the difference; changing its source reverses the old source's change and applies the new amount to the new source. Paid entries retain their selected source if you later change the item's default.
+
+**Older paid entries are not added or deducted during migration**, because their amounts may already be included in your current balances. They show a note. To explicitly include one now, save it as unpaid first, then mark it paid with a selected money source. This also applies if you edit an older paid entry: it remains uncounted until that explicit unpaid/paid action.
 
 Weekly entries repeat on the weekday of the first due date. Monthly entries repeat on its day of the month; if that day is missing, the last day of that month is used (January 31 becomes February 28 or 29, then March 31). Yearly February 29 entries use February 28 in non-leap years. No entries are generated before the first due date.
 
-**Edit item** changes the name, default amount, and repeat schedule. Entries you have already edited or marked paid retain their saved amounts, dates, and status, even if the schedule changes. Entries are grouped by their original scheduled year and month, so changing one due date into a different period does not move it to another period's list. **Delete item** asks for confirmation and removes the item and all its saved entries.
+**Edit item** changes the name, default amount, repeat schedule, and default money source. Entries you have already edited or marked paid retain their saved amounts, dates, and status, even if the schedule changes. Entries are grouped by their original scheduled year and month, so changing one due date into a different period does not move it to another period's list. **Delete item** asks for confirmation, removes the item and its saved entries, and reverses its previously recorded balance changes.
+
+Manually editing a money source sets its actual current balance. Later reversals still add or subtract the original recorded amount from that current balance; they do not reset it to an older balance. An operation that exceeds the supported amount limits fails without saving any part of the change.
 
 Date fields accept real calendar dates from 1900 through 9999. Income and payment amounts must be zero or positive; the section determines whether money is incoming or outgoing.
 
@@ -137,10 +146,12 @@ npm.cmd start
 
 ## Local Data Storage
 
-- The app saves JSON using AsyncStorage under the key `@money-tracker/wallet`.
-- Income and payment schedules and saved entries use a separate JSON key, `@money-tracker/trackers`, with schema version 1. Existing balance data is not changed by this feature.
+- The app saves one JSON object using AsyncStorage under `@money-tracker/data`, with an outer schema version of 1, wallet version 3, and trackers version 2.
+- Balances, source selections, paid status, and recorded balance changes are saved together in one write. A failed save leaves both the balances and entries unchanged.
+- Older `@money-tracker/wallet` and `@money-tracker/trackers` keys are read only if the combined key is absent. They remain untouched as migration backups. An invalid combined record never falls back to those potentially stale backups.
 - Recurring entries are calculated when you view a year; only schedules and entries you explicitly change are stored. No background task is needed to generate them.
-- Version 3 data contains `sources` (each with a stable `id`, `name`, and integer `amountMinor`), currency fixed to `IDR`, `updatedAt`, and `version`. Amounts remain in hundredths of a rupiah. No separate total is stored.
+- The wallet contains `sources` (each with a stable `id`, `name`, and integer `amountMinor`), currency fixed to `IDR`, `updatedAt`, and `version`. Amounts remain in hundredths of a rupiah. No separate total is stored.
+- Each tracker has `defaultSourceId`; saved entries can override `sourceId`. A paid entry's internal `applied` record remembers its signed balance change so edits, unpaying, and deletion can correct or reverse it without double-counting.
 - Saving successfully updates both the stored data and the displayed balance.
 - Data persists between app launches. There is no account, backend, or app-managed cloud sync.
 - This is app-private storage, not a user-visible JSON file in your Downloads folder.
@@ -183,19 +194,20 @@ src/
   components/TrackerForm.js     Shared tracker form and fields
   components/TrackerEditor.js   Recurring item editing
   components/OccurrenceEditor.js Individual entry editing
+  components/MoneySourcePicker.js Default and per-entry source selection
   screens/BalanceScreen.js      Main dashboard
+  screens/MoneySourcesScreen.js Bank/cash source list and editing
   screens/TrackerScreen.js      Income/payment lists and entries
-  hooks/useWallet.js            Balance loading and saving state
-  hooks/useTrackers.js          Tracker loading and saving state
-  storage/walletStorage.js      Balance JSON persistence
-  storage/trackerStorage.js     Tracker JSON persistence
+  hooks/useMoneyData.js         Shared money data and save lock
+  storage/moneyStorage.js       Combined JSON persistence and migration
+  utils/finance.js              Linked balance updates and reversals
   utils/money.js                Amount parsing and balance validation
   utils/trackers.js             Dates, recurrence and tracker validation
   theme.js                   Shared colors
 tests/money.test.js           Validation, totals and migration tests
-tests/storage.test.js         Persistence and failure-protection tests
+tests/finance.test.js         Linked balances, reversals and source validation
 tests/trackers.test.js        Recurrence and tracker validation tests
-tests/trackerStorage.test.js  Tracker persistence and failure-protection tests
+tests/moneyStorage.test.js    Combined persistence, migration and failure protection
 tests/trackerUi.test.js       Dashboard navigation and entry update handlers
 ```
 
