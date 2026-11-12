@@ -1,6 +1,6 @@
 # Money Tracker
 
-A personal money tracker built with Expo and JavaScript. Track named money sources in Indonesian rupiah (IDR); the current balance is their sum.
+A personal money tracker built with Expo and JavaScript. Track your current balance, recurring income, and payments in Indonesian rupiah (IDR). All tracking is manual and saved on the device.
 
 ## Requirements
 
@@ -58,6 +58,25 @@ The initial balance is zero and IDR is the only currency. Balances use Indonesia
 Existing version 1 balances (USD, EUR, GBP, PHP, INR, CAD, or AUD) and version 2 IDR balances become one source named **My money**. Every integer hundredth, including zero and negative values, and the last-updated timestamp are preserved. Legacy currencies are relabeled as IDR without exchange-rate conversion. Migration happens in memory; the original stored JSON is untouched until a successful add, edit, or delete writes version 3. Invalid or unsupported data blocks editing and offers a retry without overwriting storage.
 
 Names must contain 1 to 80 characters after trimming. Each amount must be smaller than 10 billion rupiah in magnitude. Totals must fit within JavaScript's safe integer range in hundredths. The balance is derived, not separately editable. Failed saves retain the previous list and total; repeated submissions are blocked while saving.
+
+## Income And Payments
+
+Below the balance are two cards: **Source of Income** for money you expect to receive, and **Payments** for money you need to pay. Tap either card to open its list.
+
+1. Tap **Add income** or **Add payment**.
+2. Enter a name and amount, such as Payment `5800000`, Kontrakan Fatra `1000000`, or Kontrakan Desi `12000000`.
+3. Choose **Daily**, **Weekly**, **Monthly**, or **Yearly**, and enter the **First due date** as `YYYY-MM-DD` (for example, `2026-11-01`).
+4. Save. The item's detail screen automatically lists entries for that year. Use **Previous** and **Next** to browse other years, and the month buttons to narrow the list. Daily and weekly items initially open to the current month (or their first month if they haven't started yet).
+5. Tap the **Paid** checkbox to mark an entry paid using today's date. Uncheck it to mark it unpaid and clear the paid date.
+6. Tap an entry's **Edit** button to adjust its amount, due date, paid status, or paid date. Save to keep your changes.
+
+Income uses **Paid** to mean the money has been received. Unpaid entries past their due date show **Overdue**. There are no automatic payments, bank connections, notifications, or changes to the current balance. Update your balance sources separately when needed.
+
+Weekly entries repeat on the weekday of the first due date. Monthly entries repeat on its day of the month; if that day is missing, the last day of that month is used (January 31 becomes February 28 or 29, then March 31). Yearly February 29 entries use February 28 in non-leap years. No entries are generated before the first due date.
+
+**Edit item** changes the name, default amount, and repeat schedule. Entries you have already edited or marked paid retain their saved amounts, dates, and status, even if the schedule changes. Entries are grouped by their original scheduled year and month, so changing one due date into a different period does not move it to another period's list. **Delete item** asks for confirmation and removes the item and all its saved entries.
+
+Date fields accept real calendar dates from 1900 through 9999. Income and payment amounts must be zero or positive; the section determines whether money is incoming or outgoing.
 
 ## Run In An Emulator
 
@@ -119,11 +138,13 @@ npm.cmd start
 ## Local Data Storage
 
 - The app saves JSON using AsyncStorage under the key `@money-tracker/wallet`.
+- Income and payment schedules and saved entries use a separate JSON key, `@money-tracker/trackers`, with schema version 1. Existing balance data is not changed by this feature.
+- Recurring entries are calculated when you view a year; only schedules and entries you explicitly change are stored. No background task is needed to generate them.
 - Version 3 data contains `sources` (each with a stable `id`, `name`, and integer `amountMinor`), currency fixed to `IDR`, `updatedAt`, and `version`. Amounts remain in hundredths of a rupiah. No separate total is stored.
 - Saving successfully updates both the stored data and the displayed balance.
 - Data persists between app launches. There is no account, backend, or app-managed cloud sync.
 - This is app-private storage, not a user-visible JSON file in your Downloads folder.
-- AsyncStorage is not encrypted. Clearing app data or uninstalling can delete the saved balance.
+- AsyncStorage is not encrypted. Clearing app data or uninstalling can delete your balance and trackers.
 - When testing in Expo Go, data lives in Expo Go's storage rather than a separately installed Money Tracker app.
 
 The balance functionality works without a backend. During development, Expo Go still needs access to the development server to load the app; this setup does not produce a standalone installable app.
@@ -134,14 +155,24 @@ The balance functionality works without a backend. During development, Expo Go s
 App.js                         App entry component
 index.js                       Expo entry registration
 src/
-  components/SourceEditor.js   Source editing form
-  screens/BalanceScreen.js    Main dashboard
-  hooks/useWallet.js          Loading and saving state
-  storage/walletStorage.js    Local JSON persistence
-  utils/money.js              Amount parsing and data validation
+  components/SourceEditor.js    Balance source editing
+  components/TrackerForm.js     Shared tracker form and fields
+  components/TrackerEditor.js   Recurring item editing
+  components/OccurrenceEditor.js Individual entry editing
+  screens/BalanceScreen.js      Main dashboard
+  screens/TrackerScreen.js      Income/payment lists and entries
+  hooks/useWallet.js            Balance loading and saving state
+  hooks/useTrackers.js          Tracker loading and saving state
+  storage/walletStorage.js      Balance JSON persistence
+  storage/trackerStorage.js     Tracker JSON persistence
+  utils/money.js                Amount parsing and balance validation
+  utils/trackers.js             Dates, recurrence and tracker validation
   theme.js                   Shared colors
 tests/money.test.js           Validation, totals and migration tests
 tests/storage.test.js         Persistence and failure-protection tests
+tests/trackers.test.js        Recurrence and tracker validation tests
+tests/trackerStorage.test.js  Tracker persistence and failure-protection tests
+tests/trackerUi.test.js       Dashboard navigation and entry update handlers
 ```
 
 ## Development Checks

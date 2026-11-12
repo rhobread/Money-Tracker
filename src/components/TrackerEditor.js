@@ -1,0 +1,91 @@
+import { useState } from 'react';
+import { Pressable, Text, View } from 'react-native';
+import { TrackerField, TrackerForm, trackerFormStyles as styles } from './TrackerForm';
+import { parseAmount } from '../utils/money';
+import { FREQUENCIES, todayDate, validateTracker } from '../utils/trackers';
+
+export function TrackerEditor({ tracker, kind, saving, onSave, onClose }) {
+	const [name, setName] = useState(tracker?.name ?? '');
+	const [amount, setAmount] = useState(
+		tracker ? (tracker.amountMinor / 100).toFixed(2).replace('.', ',') : '',
+	);
+	const [frequency, setFrequency] = useState(tracker?.frequency ?? 'monthly');
+	const [startDate, setStartDate] = useState(tracker?.startDate ?? todayDate());
+
+	async function submit() {
+		const next = validateTracker({
+			id: tracker?.id ?? 'new',
+			kind,
+			name,
+			amountMinor: parseAmount(amount),
+			frequency,
+			startDate,
+			entries: tracker?.entries ?? {},
+		});
+		return onSave(next);
+	}
+
+	return (
+		<TrackerForm
+			title={tracker ? 'Edit item' : kind === 'income' ? 'Add income' : 'Add payment'}
+			saving={saving}
+			onClose={onClose}
+			onSave={submit}
+		>
+			<TrackerField
+				label="Name"
+				value={name}
+				onChangeText={setName}
+				editable={!saving}
+				maxLength={80}
+				placeholder={kind === 'income' ? 'Kontrakan Fatra' : 'Electricity'}
+			/>
+			<TrackerField
+				label="Amount (IDR)"
+				value={amount}
+				onChangeText={setAmount}
+				editable={!saving}
+				keyboardType="decimal-pad"
+				maxLength={20}
+				placeholder="1000000"
+				hint="No thousands separators. Use a comma or dot for decimals."
+			/>
+			<Text style={styles.label}>Repeat</Text>
+			<View style={styles.choices}>
+				{FREQUENCIES.map((value) => (
+					<Pressable
+						key={value}
+						accessibilityRole="button"
+						accessibilityState={{ selected: value === frequency }}
+						disabled={saving}
+						onPress={() => setFrequency(value)}
+						style={[styles.choice, value === frequency && styles.selected]}
+					>
+						<Text
+							style={[styles.choiceText, value === frequency && styles.selectedText]}
+						>
+							{value}
+						</Text>
+					</Pressable>
+				))}
+			</View>
+			<TrackerField
+				label="First due date"
+				value={startDate}
+				onChangeText={setStartDate}
+				editable={!saving}
+				maxLength={10}
+				placeholder="2026-11-01"
+				autoCapitalize="none"
+				autoCorrect={false}
+				hint="YYYY-MM-DD. Repeats from this date, on the same weekday or day of the month."
+			/>
+			{tracker && (
+				<Text style={styles.hint}>
+					Changes apply to entries you haven't edited. Saved entries and paid dates are
+					kept.
+				</Text>
+			)}
+		</TrackerForm>
+	);
+}

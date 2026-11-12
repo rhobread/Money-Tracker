@@ -1,19 +1,17 @@
 {
-  "expo": {
-    "name": "Money Tracker",
-    "slug": "money-tracker",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "userInterfaceStyle": "light",
-    "backgroundColor": "#F5F3ED",
-    "ios": {
-      "supportsTablet": true
-    },
-    "android": {
-      "package": "com.moneytracker.app"
-    },
-    "plugins": [
-      "expo-font"
-    ]
-  }
+	"expo": {
+		"name": "Money Tracker",
+		"slug": "money-tracker",
+		"version": "1.0.0",
+		"orientation": "portrait",
+		"userInterfaceStyle": "light",
+		"backgroundColor": "#F5F3ED",
+		"ios": {
+			"supportsTablet": true
+		},
+		"android": {
+			"package": "com.moneytracker.app"
+		},
+		"plugins": ["expo-font"]
+	}
 }
