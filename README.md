@@ -50,7 +50,7 @@ To stop the development server, press `Ctrl+C` in the terminal. To run it again 
 
 1. Tap the **Current balance** card to open the **Money Sources** screen. Use **< Balance** or Android's back button to return.
 2. Tap **Add source** and enter a name, such as Bank A or Cash.
-3. Enter its amount in IDR, without thousands separators. Up to two decimal places are supported with a comma or dot (for example, `1250,50`). Negative amounts are supported.
+3. Enter its amount in IDR. Thousands dots appear automatically as you type: `1000` becomes `1.000`, and `1000000` becomes `1.000.000`. Enter a comma yourself for up to two decimal places, for example `1.250,50`. Negative source balances are supported.
 4. Tap **Save**. Bank A with 1000 and Bank B with 2000 produce a current balance of 3000.
 5. Use **Edit** to set a source's current balance or change its name. **Delete** asks for confirmation; sources still selected by income/payment items or entries cannot be deleted until those references are cleared or moved.
 
@@ -59,6 +59,8 @@ The initial balance is zero and IDR is the only currency. Balances use Indonesia
 Existing version 1 balances (USD, EUR, GBP, PHP, INR, CAD, or AUD) and version 2 IDR balances become one source named **My money**. Every integer hundredth, including zero and negative values, and the last-updated timestamp are preserved. Legacy currencies are relabeled as IDR without exchange-rate conversion. Migration happens in memory; the first successful save writes the combined money data described below, leaving the older keys untouched. Invalid or unsupported data blocks editing and offers a retry without overwriting storage.
 
 Names must contain 1 to 80 characters after trimming. Each amount must be smaller than 10 billion rupiah in magnitude. Totals must fit within JavaScript's safe integer range in hundredths. The balance is derived, not separately editable. Failed saves retain the previous list and total; repeated submissions are blocked while saving.
+
+The same live formatting is used for balance sources, recurring income/payments, and individual entries. It does not automatically add a decimal comma or fractional digits while typing. Grouped values can be pasted. On keyboards that show a dot as their decimal key, pressing that key inserts a decimal comma. Grouping is display-only; storage and balance calculations still use exact integer hundredths.
 
 ## Income And Payments
 
@@ -297,6 +299,7 @@ assets/                        Logo source and generated app icons
 scripts/generate-icons.js      SVG-to-PNG icon generation
 src/
   components/SourceEditor.js    Balance source editing
+  components/AmountInput.js     Shared live IDR grouping and decimal input
   components/TrackerForm.js     Shared tracker form and fields
   components/TrackerEditor.js   Recurring item editing
   components/OccurrenceEditor.js Individual entry editing

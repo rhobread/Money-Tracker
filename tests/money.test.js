@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const {
 	parseAmount,
 	formatMoney,
+	formatAmountInput,
+	normalizeAmountInput,
 	validateWallet,
 	validateSource,
 	totalMinor,
@@ -65,6 +67,65 @@ test('formats only IDR with Indonesian separators and two decimal places', () =>
 	assert.equal(formatMoney(125050).replace(/\s/g, ' '), 'Rp 1.250,50');
 	assert.equal(formatMoney(0).replace(/\s/g, ' '), 'Rp 0,00');
 	assert.equal(formatMoney(-12345).replace(/\s/g, ' '), '-Rp 123,45');
+});
+
+test('amount typing adds thousands dots without adding a decimal comma', () => {
+	for (const [raw, display] of [
+		['', ''],
+		['1', '1'],
+		['100', '100'],
+		['1000', '1.000'],
+		['10000', '10.000'],
+		['1000000', '1.000.000'],
+		['-1000', '-1.000'],
+		['1000,', '1.000,'],
+		['1000,5', '1.000,5'],
+		['1000,50', '1.000,50'],
+		['0,05', '0,05'],
+		['-', '-'],
+	]) {
+		assert.equal(formatAmountInput(raw), display);
+		assert.equal(normalizeAmountInput(display), raw);
+	}
+});
+
+test('input normalization accepts grouped pastes and retains manually entered fractions', () => {
+	assert.equal(normalizeAmountInput('1.234.567,89'), '1234567,89');
+	assert.equal(normalizeAmountInput(' -1.234,50 '), '-1234,50');
+	assert.equal(normalizeAmountInput('0001234,00'), '1234,00');
+	assert.equal(normalizeAmountInput(',5'), '0,5');
+	assert.equal(normalizeAmountInput('-,05'), '-0,05');
+	assert.equal(normalizeAmountInput(','), '0,');
+	assert.equal(normalizeAmountInput('1250.50'), '1250,50');
+	assert.equal(normalizeAmountInput('0.29'), '0,29');
+	assert.equal(normalizeAmountInput('1.0000'), null);
+	assert.equal(normalizeAmountInput('1.0000', true), '10000');
+	for (const invalid of [
+		'1,234',
+		'1,2,3',
+		'1,2.3',
+		'1..000',
+		'1234.567',
+		'1e3',
+		'1-2',
+		'--1',
+		'Rp 1000',
+		'NaN',
+		null,
+		1000,
+	]) {
+		assert.equal(normalizeAmountInput(invalid), null);
+	}
+});
+
+test('display grouping roundtrips to exactly the same integer stored amount', () => {
+	for (const minor of [
+		0, 1, 29, 100000, 123456789, -29, -123456789, 999999999999, -999999999999,
+	]) {
+		const raw = (minor / 100).toFixed(2).replace('.', ',');
+		assert.equal(parseAmount(normalizeAmountInput(formatAmountInput(raw))), minor);
+	}
+	assert.throws(() => parseAmount(normalizeAmountInput('10.000.000.000')));
 });
 
 test('migrates every shipped version 1 currency without conversion or data loss', () => {

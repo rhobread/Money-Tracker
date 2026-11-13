@@ -4,6 +4,7 @@ import { TrackerField, TrackerForm, trackerFormStyles as styles } from './Tracke
 import { parseAmount } from '../utils/money';
 import { FREQUENCIES, todayDate, validateTracker } from '../utils/trackers';
 import { MoneySourcePicker } from './MoneySourcePicker';
+import { AmountInput } from './AmountInput';
 
 export function TrackerEditor({ tracker, kind, sources, saving, onSave, onClose }) {
 	const [name, setName] = useState(tracker?.name ?? '');
@@ -45,13 +46,14 @@ export function TrackerEditor({ tracker, kind, sources, saving, onSave, onClose 
 			/>
 			<TrackerField
 				label="Amount (IDR)"
+				inputComponent={AmountInput}
 				value={amount}
 				onChangeText={setAmount}
 				editable={!saving}
 				keyboardType="decimal-pad"
 				maxLength={20}
-				placeholder="1000000"
-				hint="No thousands separators. Use a comma or dot for decimals."
+				placeholder="1.000.000"
+				hint="Thousands dots are automatic. Use a comma for decimals."
 			/>
 			<MoneySourcePicker
 				sources={sources}

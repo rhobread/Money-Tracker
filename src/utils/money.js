@@ -5,9 +5,7 @@ const MAX_MINOR = 999999999999;
 function parseAmount(value) {
 	const normalized = value.trim().replace(',', '.');
 	if (!/^-?\d+(\.\d{1,2})?$/.test(normalized)) {
-		throw new Error(
-			'Enter an amount with up to 2 decimal places, like 1250,50, without thousands separators.',
-		);
+		throw new Error('Enter a number with up to 2 decimal places after the comma.');
 	}
 	const negative = normalized.startsWith('-');
 	const [whole, fraction = ''] = normalized.replace('-', '').split('.');
@@ -25,6 +23,27 @@ function formatMoney(minor) {
 		minimumFractionDigits: 2,
 		maximumFractionDigits: 2,
 	}).format(minor / 100);
+}
+
+// Form state stays ungrouped; thousands dots are only shown by AmountInput.
+function normalizeAmountInput(value, editing = false) {
+	if (typeof value !== 'string') return null;
+	let text = value.trim();
+	if (!editing && /^-?\d*\.\d{1,2}$/.test(text)) text = text.replace('.', ',');
+	if (!editing && text.includes('.') && !/^-?\d{1,3}(?:\.\d{3})+(,\d{0,2})?$/.test(text))
+		return null;
+	if (!/^-?[\d.]*(,\d{0,2})?$/.test(text)) return null;
+	text = text.replace(/\./g, '');
+	const negative = text.startsWith('-');
+	const [whole, fraction] = (negative ? text.slice(1) : text).split(',');
+	const integer = whole.replace(/^0+(?=\d)/, '') || (fraction !== undefined ? '0' : '');
+	return `${negative ? '-' : ''}${integer}${fraction !== undefined ? `,${fraction}` : ''}`;
+}
+
+function formatAmountInput(value) {
+	const [whole, fraction] = value.split(',');
+	const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+	return `${grouped}${fraction !== undefined ? `,${fraction}` : ''}`;
 }
 
 function validateWallet(value) {
@@ -98,4 +117,12 @@ function totalMinor(sources) {
 	return Number(total);
 }
 
-module.exports = { parseAmount, formatMoney, validateWallet, validateSource, totalMinor };
+module.exports = {
+	parseAmount,
+	formatMoney,
+	normalizeAmountInput,
+	formatAmountInput,
+	validateWallet,
+	validateSource,
+	totalMinor,
+};

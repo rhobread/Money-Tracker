@@ -16,6 +16,7 @@ function screen(modulePath, modules) {
 	const refs = [];
 	let stateIndex;
 	let refIndex;
+	let layouts;
 	const react = {
 		useState(initial) {
 			const index = stateIndex++;
@@ -32,6 +33,9 @@ function screen(modulePath, modules) {
 			return refs[index] ?? (refs[index] = { current: initial });
 		},
 		useEffect() {},
+		useLayoutEffect(effect) {
+			layouts.push(effect);
+		},
 	};
 	const native = Object.fromEntries(
 		[
@@ -70,6 +74,7 @@ function screen(modulePath, modules) {
 			if (name === 'react-native-safe-area-context') return { SafeAreaView: 'SafeAreaView' };
 			if (name === '../theme') return { colors: {} };
 			if (name in modules) return modules[name];
+			if (name === './AmountInput') return { AmountInput: 'AmountInput' };
 			if (name === '../utils/money') return require('../src/utils/money');
 			if (name === '../utils/trackers') return require('../src/utils/trackers');
 			throw new Error(`Unexpected import: ${name}`);
@@ -78,8 +83,11 @@ function screen(modulePath, modules) {
 	return (props) => {
 		stateIndex = 0;
 		refIndex = 0;
+		layouts = [];
 		const name = modulePath.split('/').pop().replace('.js', '');
-		return exports[name](props);
+		const tree = exports[name](props);
+		for (const effect of layouts) effect();
+		return tree;
 	};
 }
 
@@ -94,6 +102,156 @@ function text(tree) {
 	if (typeof tree === 'string' || typeof tree === 'number') return String(tree);
 	return tree ? text(tree.props?.children) : '';
 }
+
+function amountInput(initial = '') {
+	let raw = initial;
+	let caret;
+	const render = screen('../src/components/AmountInput.js', {});
+	const current = () => {
+		const tree = render({
+			value: raw,
+			onChangeText: (next) => {
+				raw = next;
+			},
+		});
+		tree.props.ref.current = {
+			setNativeProps: (props) => {
+				caret = props.selection.start;
+			},
+		};
+		return tree;
+	};
+	function edit(text, start, end = start, key) {
+		const tree = current();
+		tree.props.onSelectionChange({ nativeEvent: { selection: { start, end } } });
+		if (key) tree.props.onKeyPress({ nativeEvent: { key } });
+		tree.props.onChangeText(text);
+		const next = current();
+		return { raw, display: next.props.value, caret };
+	}
+	return { current, edit };
+}
+
+test('amount input groups digits as typed while passing ungrouped state to the parent', () => {
+	const input = amountInput();
+	for (const [typed, start, display, raw] of [
+		['1', 0, '1', '1'],
+		['10', 1, '10', '10'],
+		['100', 2, '100', '100'],
+		['1000', 3, '1.000', '1000'],
+		['1.0000', 5, '10.000', '10000'],
+	]) {
+		const result = input.edit(typed, start, start, '0');
+		assert.equal(result.display, display);
+		assert.equal(result.raw, raw);
+		assert.equal(result.caret, display.length);
+	}
+});
+
+test('amount input preserves manual decimal comma and rejects a third fractional digit', () => {
+	const input = amountInput('1000');
+	assert.equal(input.edit('1.000,', 5, 5, ',').display, '1.000,');
+	assert.equal(input.edit('1.000,5', 6, 6, '5').display, '1.000,5');
+	assert.equal(input.edit('1.000,50', 7, 7, '0').raw, '1000,50');
+	const rejected = input.edit('1.000,501', 8, 8, '1');
+	assert.equal(rejected.raw, '1000,50');
+	assert.equal(rejected.display, '1.000,50');
+	assert.equal(rejected.caret, 8);
+	assert.equal(require('../src/utils/money').parseAmount(rejected.raw), 100050);
+});
+
+test('amount input supports selection replacement, paste, leading comma, and clearing', () => {
+	const input = amountInput('5800000,00');
+	assert.equal(input.edit('2000', 0, 12).display, '2.000');
+	assert.equal(input.edit('1.234.567,89', 0, 5).raw, '1234567,89');
+	assert.equal(input.edit('', 0, 12).raw, '');
+	const fraction = input.edit(',', 0, 0, ',');
+	assert.equal(fraction.display, '0,');
+	assert.equal(fraction.caret, 2);
+	assert.equal(input.edit('0,5', 2, 2, '5').raw, '0,5');
+});
+
+test('amount input skips a deleted grouping dot and preserves a middle cursor across regrouping', () => {
+	const input = amountInput('1000');
+	const skip = input.edit('1000', 2, 2, 'Backspace');
+	assert.equal(skip.raw, '1000');
+	assert.equal(skip.display, '1.000');
+	assert.equal(skip.caret, 1);
+	const middle = input.edit('10.000', 1, 1, '0');
+	assert.equal(middle.raw, '10000');
+	assert.equal(middle.display, '10.000');
+	assert.equal(middle.caret, 2);
+	const removed = input.edit('10.00', 6, 6, 'Backspace');
+	assert.equal(removed.raw, '1000');
+	assert.equal(removed.display, '1.000');
+	assert.equal(removed.caret, 5);
+});
+
+test('a phone decimal-dot key enters a manual comma, but pasted dots remain thousands separators', () => {
+	const input = amountInput();
+	assert.equal(input.edit('1.000', 0).raw, '1000');
+	const decimal = input.edit('1.000.', 5, 5, '.');
+	assert.equal(decimal.raw, '1000,');
+	assert.equal(decimal.display, '1.000,');
+	assert.equal(decimal.caret, 6);
+	assert.equal(input.edit('1.000,5', 6, 6, '5').raw, '1000,5');
+});
+
+test('decimal-dot pastes keep their value and malformed separators never become another amount', () => {
+	const input = amountInput();
+	const pasted = input.edit('1250.50', 0);
+	assert.equal(pasted.raw, '1250,50');
+	assert.equal(pasted.display, '1.250,50');
+	assert.equal(pasted.caret, 8);
+	assert.equal(require('../src/utils/money').parseAmount(pasted.raw), 125050);
+	const invalid = input.edit('1,2.3', 0, 8);
+	assert.equal(invalid.raw, '1250,50');
+	assert.equal(invalid.display, '1.250,50');
+});
+
+test('forward delete skips a grouping dot and the next delete can remove its following digit', () => {
+	const input = amountInput('1000');
+	const skip = input.edit('1000', 1, 1, 'Delete');
+	assert.equal(skip.display, '1.000');
+	assert.equal(skip.caret, 2);
+	const remove = input.edit('1.00', 2, 2, 'Delete');
+	assert.equal(remove.raw, '100');
+	assert.equal(remove.caret, 1);
+});
+
+test('normalizing a removed leading zero does not move the cursor across remaining digits', () => {
+	const input = amountInput('1234');
+	const replacement = input.edit('0.234', 0, 1, '0');
+	assert.equal(replacement.raw, '234');
+	assert.equal(replacement.caret, 0);
+	const typed = input.edit('5234', 0, 0, '5');
+	assert.equal(typed.display, '5.234');
+	assert.equal(typed.caret, 1);
+});
+
+test('source editor uses shared amount input and saves the exact ungrouped value', async () => {
+	let saved;
+	const render = screen('../src/components/SourceEditor.js', {});
+	const props = {
+		source: { id: 'a', name: 'Bank A', amountMinor: 125050 },
+		saving: false,
+		onClose: () => {},
+		onSave: async (value) => {
+			saved = value;
+			return true;
+		},
+	};
+	let tree = render(props);
+	const input = nodes(tree).find((node) => node.type === 'AmountInput');
+	assert.equal(input.props.value, '1250,50');
+	input.props.onChangeText('2000,50');
+	tree = render(props);
+	await nodes(tree)
+		.find((node) => node.props.accessibilityLabel === 'Save source')
+		.props.onPress();
+	assert.equal(saved.name, 'Bank A');
+	assert.equal(saved.amountMinor, 200050);
+});
 
 test('dashboard opens separate money sources, income, and payment screens', () => {
 	const render = screen('../src/screens/BalanceScreen.js', {
@@ -591,6 +749,10 @@ test('tracker editor includes the selected default source when saving main setti
 		},
 	};
 	let tree = render(props);
+	assert.equal(
+		nodes(tree).find((node) => node.props.label === 'Amount (IDR)').props.inputComponent,
+		'AmountInput',
+	);
 	nodes(tree)
 		.find((node) => node.props.label === 'Name')
 		.props.onChangeText('Salary');
@@ -710,6 +872,10 @@ test('entry editor exposes paid date only when paid and submits the manually ent
 		},
 	};
 	let tree = render(props);
+	assert.equal(
+		nodes(tree).find((node) => node.props.label === 'Amount (IDR)').props.inputComponent,
+		'AmountInput',
+	);
 	assert.equal(
 		nodes(tree).some((node) => node.props.label === 'Paid date'),
 		false,

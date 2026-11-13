@@ -81,11 +81,16 @@ export function TrackerForm({ title, saving, onClose, onSave, children }) {
 	);
 }
 
-export function TrackerField({ label, hint, ...props }) {
+export function TrackerField({
+	label,
+	hint,
+	inputComponent: InputComponent = TextInput,
+	...props
+}) {
 	return (
 		<View style={styles.field}>
 			<Text style={styles.label}>{label}</Text>
-			<TextInput
+			<InputComponent
 				accessibilityLabel={label}
 				style={styles.input}
 				placeholderTextColor={colors.muted}

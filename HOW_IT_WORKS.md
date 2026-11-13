@@ -248,6 +248,8 @@ Stored:    amountMinor: 100000
 
 Input and display conversion are handled by [money.js](src/utils/money.js). Only IDR is supported; no exchange-rate conversion takes place.
 
+Amount forms share [AmountInput.js](src/components/AmountInput.js). Typing `1000` displays `1.000`; typing a comma yourself allows decimals such as `1.000,50`. The component sends the ungrouped string `1000,50` to its parent, so existing parsing and integer storage remain exact. It also adjusts the cursor when grouping dots appear or disappear. No decimal comma or fractional digits are added automatically while typing.
+
 ## 9. How Data Is Saved
 
 Money data is separated into interface, state, calculation, and storage layers:
@@ -364,6 +366,7 @@ Paid entries keep their chosen source even if the item's default changes. The ne
 | Recurring item editing | [TrackerEditor.js](src/components/TrackerEditor.js) |
 | One entry's amount, due date, or paid details | [OccurrenceEditor.js](src/components/OccurrenceEditor.js) |
 | Shared tracker form, fields, and checkbox | [TrackerForm.js](src/components/TrackerForm.js) |
+| Live thousands dots and manual decimal input | [AmountInput.js](src/components/AmountInput.js) |
 | Default and per-entry source picker | [MoneySourcePicker.js](src/components/MoneySourcePicker.js) |
 | Shared balance/tracker loading and saving state | [useMoneyData.js](src/hooks/useMoneyData.js) |
 | Combined JSON storage and migration | [moneyStorage.js](src/storage/moneyStorage.js) |

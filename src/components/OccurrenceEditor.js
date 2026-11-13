@@ -9,6 +9,7 @@ import {
 import { parseAmount } from '../utils/money';
 import { formatDate, todayDate } from '../utils/trackers';
 import { MoneySourcePicker } from './MoneySourcePicker';
+import { AmountInput } from './AmountInput';
 
 export function OccurrenceEditor({
 	occurrence,
@@ -46,12 +47,13 @@ export function OccurrenceEditor({
 			</Text>
 			<TrackerField
 				label="Amount (IDR)"
+				inputComponent={AmountInput}
 				value={amount}
 				onChangeText={setAmount}
 				editable={!saving}
 				keyboardType="decimal-pad"
 				maxLength={20}
-				hint="No thousands separators."
+				hint="Thousands dots are automatic. Use a comma for decimals."
 			/>
 			<MoneySourcePicker
 				sources={sources}

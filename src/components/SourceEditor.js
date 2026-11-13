@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { parseAmount, validateSource } from '../utils/money';
 import { colors } from '../theme';
+import { AmountInput } from './AmountInput';
 
 export function SourceEditor({ source, saving, onSave, onClose }) {
 	const [name, setName] = useState(source?.name ?? '');
@@ -79,7 +80,7 @@ export function SourceEditor({ source, saving, onSave, onClose }) {
 							placeholderTextColor={colors.muted}
 						/>
 						<Text style={styles.label}>Amount (IDR)</Text>
-						<TextInput
+						<AmountInput
 							accessibilityLabel="Current amount in Indonesian rupiah"
 							style={styles.input}
 							value={amount}
@@ -102,7 +103,7 @@ export function SourceEditor({ source, saving, onSave, onClose }) {
 							<Text style={styles.cancel}>Toggle positive / negative</Text>
 						</Pressable>
 						<Text style={styles.hint}>
-							No thousands separators. Use a comma or dot for decimals, e.g. 1250,50.
+							Thousands dots are automatic. Use a comma for decimals, e.g. 1.250,50.
 						</Text>
 						{error && (
 							<Text accessibilityRole="alert" style={styles.error}>
