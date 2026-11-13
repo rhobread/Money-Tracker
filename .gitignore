@@ -2,6 +2,9 @@ node_modules/
 .expo/
 dist/
 web-build/
+builds/
+*.apk
+*.aab
 android/
 ios/
 *.jks

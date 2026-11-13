@@ -5,6 +5,9 @@ node_modules/
 .kilo/
 dist/
 web-build/
+builds/
+*.apk
+*.aab
 android/
 ios/
 .env*
