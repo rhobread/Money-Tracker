@@ -162,7 +162,9 @@ Alternatively, create an EAS account, link this project using the EAS CLI setup,
 npx eas-cli@latest build --platform android --profile preview
 ```
 
-Set `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` in the EAS project's **preview** environment before building. Local `.env` files are gitignored and should not be assumed to reach a cloud build. Use the **development** EAS environment for the development profile. These public IDs can be plaintext environment values, but never embed a client secret.
+Before building, open `eas.json` and replace `PASTE_YOUR_WEB_CLIENT_ID_HERE` at `build.preview.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` with the complete **Web application Client ID** from Google, including `.apps.googleusercontent.com`. This lets the APK build use your ID without configuring Expo's website. Do not use the Android client ID or a client secret. The client ID is public and safe to include in this config.
+
+If you prefer the EAS website's **preview** environment variable instead, remove the matching `env` entry from `eas.json` so it does not override your website value. Local `.env` files are gitignored and should not be assumed to reach a cloud build. For the development profile, set the same variable in the **development** EAS environment or your local development `.env`.
 
 Install the resulting APK on the phone. A standalone APK does not require Expo Go or the development server. Internet is needed for sign-in and sync, but cached account/device data works offline.
 

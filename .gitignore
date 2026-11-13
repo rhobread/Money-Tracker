@@ -13,3 +13,5 @@ ios/
 !.env.example
 npm-debug.log*
 .DS_Store
+app.json
+eas.json
