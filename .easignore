@@ -1,0 +1,32 @@
+# Keep dependencies, generated output, and local credentials out of build uploads.
+node_modules/
+.expo/
+.git/
+.kilo/
+dist/
+web-build/
+android/
+ios/
+.env*
+!.env.example
+*.jks
+*.keystore
+*.p8
+*.p12
+*.pfx
+*.key
+*.pem
+*.mobileprovision
+credentials.json
+credentials/
+*client_secret*.json
+*service-account*.json
+*service_account*.json
+google-services*.json
+GoogleService-Info*.plist
+npm-debug.log*
+.DS_Store
+
+# Git ignores these local settings, but EAS needs them to build the app.
+!app.json
+!eas.json

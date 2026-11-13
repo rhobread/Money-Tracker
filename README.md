@@ -239,6 +239,16 @@ npm.cmd install
 npm.cmd start
 ```
 
+## Git And Build Uploads
+
+`app.json` and `eas.json` are local configuration files in this setup and are intentionally ignored by Git. Keep local backups; cloning the repository alone will not restore them. The separate `.easignore` explicitly includes these two files because EAS needs the app identity, project association, and build profile. Without that separate upload configuration, Git's ignore rules can cause prebuild failures.
+
+Both ignore files exclude local `.env` files, `credentials.json`, `credentials/`, keystores, signing keys, client-secret JSON files, and service-account files. EAS uses its existing remote signing credentials instead of uploading local signing files with the source code.
+
+Adding a name to `.gitignore` does not stop tracking files that were already committed. Those files must also be removed from Git's index with `git rm --cached`; this keeps their local copies. Existing Git history is not erased. If a real private key, password, or client secret was previously published, revoke/rotate it rather than relying on ignore rules.
+
+OAuth client IDs and app identifiers are public identifiers embedded in the built app, not passwords. Ignoring them keeps them out of future source commits but does not encrypt or hide them inside an APK. Keep actual signing keys and client secrets private.
+
 ## Local Data Storage
 
 - Device-only mode saves one JSON object using AsyncStorage under `@money-tracker/data`, with an outer schema version of 1, wallet version 3, and trackers version 2.
