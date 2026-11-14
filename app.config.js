@@ -5,6 +5,7 @@ module.exports = ({ config }) => {
 	}
 	return {
 		...config,
+		name: 'Personal Tracker',
 		scheme: 'moneytracker',
 		ios: { ...config.ios, bundleIdentifier: 'com.moneytracker.app' },
 		plugins: [

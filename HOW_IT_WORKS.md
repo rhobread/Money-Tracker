@@ -1,8 +1,8 @@
-# How Money Tracker Works
+# How Personal Tracker Works
 
 A guide to this project **without assuming you already know React**.
 
-> **Start here:** The home screen is [src/screens/BalanceScreen.js](src/screens/BalanceScreen.js). It displays your current balance, Source of Income, Payments, and Google Drive controls. Sign-in is optional.
+> **Start here:** The home screen is [src/screens/PersonalTrackerScreen.js](src/screens/PersonalTrackerScreen.js). Open **Money** for the existing balance, income, payments, and Google Drive controls, or **Habit Tracker** for daily and weekly habit checklists. Sign-in is optional and only applies to Money. The rest of this guide describes the existing Money section.
 
 ## Contents
 
@@ -27,7 +27,9 @@ The startup order is:
 ```text
 index.js
     -> App.js
-        -> src/screens/BalanceScreen.js
+        -> src/screens/PersonalTrackerScreen.js
+            -> Money: src/screens/BalanceScreen.js
+            -> Habits: src/screens/HabitScreen.js
 ```
 
 **[index.js](index.js)** tells Expo which component starts the app:
@@ -46,7 +48,7 @@ export default function App() {
 	return (
 		<SafeAreaProvider>
 			<StatusBar style="dark" />
-			<BalanceScreen />
+			<PersonalTrackerScreen />
 		</SafeAreaProvider>
 	);
 }
@@ -54,9 +56,9 @@ export default function App() {
 
 - **`SafeAreaProvider`** supports keeping content clear of the phone's notch and system bars.
 - **`StatusBar`** controls the appearance of the phone's top status bar.
-- **`BalanceScreen`** is the home screen.
+- **`PersonalTrackerScreen`** is the home screen. It keeps one Money session alive while you move between sections and owns a separate habit store.
 
-The home screen initially shows a **loading spinner** while it reads saved balance data. If loading fails, it shows an error and a **Try again** button instead of overwriting your data.
+The home screen opens immediately. Each section shows a **loading spinner** while reading its saved data. If loading fails, that section shows an error and a **Try again** button instead of overwriting your data. Habits use the separate `@personal-tracker/habits` device-storage key and do not change Money data or Google Drive snapshots.
 
 ## 2. The Tools We Use
 

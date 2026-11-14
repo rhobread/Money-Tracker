@@ -27,15 +27,9 @@ test('app config preserves app icons, Android package, existing plugins, and unr
 	assert.equal(config.ios.supportsTablet, true);
 	assert.equal(config.ios.bundleIdentifier, 'com.moneytracker.app');
 	assert.equal(config.scheme, 'moneytracker');
+	assert.equal(config.name, 'Personal Tracker');
 	assert.deepEqual(plain(config.plugins), [...original.plugins, 'expo-dev-client']);
-	for (const key of [
-		'name',
-		'slug',
-		'version',
-		'orientation',
-		'userInterfaceStyle',
-		'backgroundColor',
-	]) {
+	for (const key of ['slug', 'version', 'orientation', 'userInterfaceStyle', 'backgroundColor']) {
 		assert.equal(config[key], original[key]);
 	}
 	assert.deepEqual(baseConfig, original, 'Dynamic config must not mutate static config');

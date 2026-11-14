@@ -1,6 +1,21 @@
-# Money Tracker
+# Personal Tracker
 
-A personal money tracker built with Expo and JavaScript. Track your current balance, recurring income, and payments in Indonesian rupiah (IDR). Data saves on your device first, with optional Google sign-in and Google Drive sync.
+A simple personal tracker built with Expo and JavaScript, with a bread logo and two sections: **Money** and **Habit Tracker**. Money keeps the existing balance, recurring income, and payments in Indonesian rupiah (IDR), including optional Google Drive sync. Habits save separately on this device for now.
+
+The visible app name is Personal Tracker. Existing app IDs, storage keys, and the GitHub URL stay unchanged so installs, Google sign-in, and portfolio links keep working. Suggested future repository name: `rhobread-tracker`.
+
+## Habits
+
+1. Open **Habit Tracker** below Money, then tap **Add habit**.
+2. Enter a name, such as Workout, and choose **Build a good habit** or **Avoid a bad habit**.
+3. Pick the days. Mon, Tue, Thu, and Fri are selected by default, giving a four-day weekly goal. **Every day** selects all seven.
+4. In **Weekly**, check each scheduled day when you did the good habit or avoided the bad one. Checking all scheduled days completes that week's goal.
+5. Switch to **Daily** for the selected day's habits. Use the arrows to browse days or weeks and review past check-ins.
+6. **Edit** changes the name and schedule without discarding check-ins. The good/bad type stays fixed to preserve their meaning. **Delete** asks before removing a habit and its history.
+
+New habits start at the beginning of the current week. You can check today or a past scheduled day, but not future days. Each check-in stores both the habit date and the time it was checked. Unchecking removes that check-in. Bad habits use an unchecked day for an occurrence or a day not yet checked; this first version does not distinguish the two.
+
+Habits are device-only and separate from Money accounts. They are **not included in Google Drive sync**, account import, or Money conflict resolution. Clearing app data or uninstalling can erase them.
 
 ## Requirements
 
@@ -48,7 +63,7 @@ To stop the development server, press `Ctrl+C` in the terminal. To run it again 
 
 ## Use The App
 
-1. Tap the **Current balance** card to open the **Money Sources** screen. Use **< Balance** or Android's back button to return.
+1. Open **Money** from Personal Tracker, then tap the **Current balance** card to open the **Money Sources** screen. Use **< Balance** or Android's back button to return.
 2. Tap **Add source** and enter a name, such as Bank A or Cash.
 3. Enter its amount in IDR. Thousands dots appear automatically as you type: `1000` becomes `1.000`, and `1000000` becomes `1.000.000`. Enter a comma yourself for up to two decimal places, for example `1.250,50`. Negative source balances are supported.
 4. Tap **Save**. Bank A with 1000 and Bank B with 2000 produce a current balance of 3000.

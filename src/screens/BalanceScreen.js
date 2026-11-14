@@ -1,17 +1,30 @@
-import { useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import {
+	ActivityIndicator,
+	BackHandler,
+	Pressable,
+	ScrollView,
+	StyleSheet,
+	Text,
+	View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useMoneyData } from '../hooks/useMoneyData';
 import { TrackerScreen } from './TrackerScreen';
 import { MoneySourcesScreen } from './MoneySourcesScreen';
 import { AccountScreen } from './AccountScreen';
 import { formatMoney, totalMinor } from '../utils/money';
 import { colors } from '../theme';
 
-export function BalanceScreen() {
+export function BalanceScreen({ money, onBack, onEditingChange }) {
 	const [page, setPage] = useState(null);
-	const [syncPaused, setSyncPaused] = useState(false);
-	const money = useMoneyData({ pauseSync: syncPaused });
+	useEffect(() => {
+		if (page || money.conflict) return;
+		const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+			if (!money.saving) onBack();
+			return true;
+		});
+		return () => subscription.remove();
+	}, [page, money.conflict, money.saving, onBack]);
 	const {
 		data,
 		loading,
@@ -31,6 +44,14 @@ export function BalanceScreen() {
 	if (loading || loadError) {
 		return (
 			<SafeAreaView style={styles.center}>
+				<Pressable
+					accessibilityRole="button"
+					disabled={saving}
+					onPress={onBack}
+					style={styles.back}
+				>
+					<Text style={styles.edit}>{'< Personal Tracker'}</Text>
+				</Pressable>
 				{loading ? (
 					<ActivityIndicator size="large" color={colors.green} />
 				) : (
@@ -66,7 +87,7 @@ export function BalanceScreen() {
 				wallet={wallet}
 				saving={saving}
 				updateSources={updateSources}
-				onEditingChange={setSyncPaused}
+				onEditingChange={onEditingChange}
 				onBack={() => setPage(null)}
 			/>
 		);
@@ -81,7 +102,7 @@ export function BalanceScreen() {
 				saveTracker={saveTracker}
 				saveEntry={saveEntry}
 				deleteTracker={deleteTracker}
-				onEditingChange={setSyncPaused}
+				onEditingChange={onEditingChange}
 				onBack={() => setPage(null)}
 			/>
 		);
@@ -90,7 +111,15 @@ export function BalanceScreen() {
 	return (
 		<SafeAreaView style={styles.safe}>
 			<ScrollView contentContainerStyle={styles.content}>
-				<Text style={styles.title}>Money Tracker</Text>
+				<Pressable
+					accessibilityRole="button"
+					disabled={saving}
+					onPress={onBack}
+					style={styles.back}
+				>
+					<Text style={styles.edit}>{'< Personal Tracker'}</Text>
+				</Pressable>
+				<Text style={styles.title}>Money</Text>
 				<Pressable
 					accessibilityRole="button"
 					accessibilityLabel="Current balance"
@@ -150,7 +179,7 @@ export function BalanceScreen() {
 									? 'Changes waiting to sync'
 									: money.account
 										? 'Account data saved on this phone'
-										: 'Sign in to save and restore your data'}
+										: 'Sign in to save and restore your money data'}
 					</Text>
 				</Pressable>
 			</ScrollView>
@@ -168,6 +197,7 @@ const styles = StyleSheet.create({
 		gap: 16,
 	},
 	content: { padding: 24, paddingBottom: 36, maxWidth: 560, width: '100%', alignSelf: 'center' },
+	back: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', marginBottom: 12 },
 	title: { fontSize: 26, fontWeight: '700', color: colors.ink, marginBottom: 24 },
 	balanceCard: { backgroundColor: colors.green, borderRadius: 26, padding: 26 },
 	cardLabel: { color: '#DBE6D7', fontSize: 16 },

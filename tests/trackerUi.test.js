@@ -20,7 +20,8 @@ function screen(modulePath, modules) {
 	const react = {
 		useState(initial) {
 			const index = stateIndex++;
-			if (!(index in states)) states[index] = initial;
+			if (!(index in states))
+				states[index] = typeof initial === 'function' ? initial() : initial;
 			return [
 				states[index],
 				(value) => {
@@ -41,6 +42,7 @@ function screen(modulePath, modules) {
 		[
 			'ActivityIndicator',
 			'FlatList',
+			'Image',
 			'KeyboardAvoidingView',
 			'Modal',
 			'Pressable',
@@ -77,6 +79,7 @@ function screen(modulePath, modules) {
 			if (name === './AmountInput') return { AmountInput: 'AmountInput' };
 			if (name === '../utils/money') return require('../src/utils/money');
 			if (name === '../utils/trackers') return require('../src/utils/trackers');
+			if (name === '../utils/habits') return require('../src/utils/habits');
 			throw new Error(`Unexpected import: ${name}`);
 		},
 	});
@@ -254,18 +257,19 @@ test('source editor uses shared amount input and saves the exact ungrouped value
 });
 
 test('dashboard opens separate money sources, income, and payment screens', () => {
-	const render = screen('../src/screens/BalanceScreen.js', {
-		'../hooks/useMoneyData': {
-			useMoneyData: () => ({
-				data: { wallet: { sources: [] }, trackers: { version: 2, items: [] } },
-				loading: false,
-				saving: false,
-			}),
-		},
+	const renderScreen = screen('../src/screens/BalanceScreen.js', {
 		'./TrackerScreen': { TrackerScreen: 'TrackerScreen' },
 		'./MoneySourcesScreen': { MoneySourcesScreen: 'MoneySourcesScreen' },
 		'./AccountScreen': { AccountScreen: 'AccountScreen' },
 	});
+	const render = () =>
+		renderScreen({
+			money: {
+				data: { wallet: { sources: [] }, trackers: { version: 2, items: [] } },
+				loading: false,
+				saving: false,
+			},
+		});
 	let tree = render();
 	assert.doesNotMatch(text(tree), /Add source/);
 	assert.match(text(tree), /Source of Income/);
@@ -299,19 +303,272 @@ test('dashboard opens separate money sources, income, and payment screens', () =
 
 test('cloud conflicts force the account screen before displaying editable money screens', () => {
 	const render = screen('../src/screens/BalanceScreen.js', {
-		'../hooks/useMoneyData': {
-			useMoneyData: () => ({
-				data: null,
-				loading: false,
-				saving: false,
-				conflict: { heads: [] },
-			}),
-		},
 		'./TrackerScreen': { TrackerScreen: 'TrackerScreen' },
 		'./MoneySourcesScreen': { MoneySourcesScreen: 'MoneySourcesScreen' },
 		'./AccountScreen': { AccountScreen: 'AccountScreen' },
 	});
-	assert.equal(render().type, 'AccountScreen');
+	assert.equal(
+		render({
+			money: {
+				data: null,
+				loading: false,
+				saving: false,
+				conflict: { heads: [] },
+			},
+		}).type,
+		'AccountScreen',
+	);
+});
+
+test('Personal Tracker opens Money and Habits and keeps the same shared sessions', () => {
+	const money = { data: null, loading: true };
+	const habits = { data: null, loading: true };
+	const render = screen('../src/screens/PersonalTrackerScreen.js', {
+		'../hooks/useMoneyData': { useMoneyData: () => money },
+		'../hooks/useHabits': { useHabits: () => habits },
+		'./BalanceScreen': { BalanceScreen: 'BalanceScreen' },
+		'./HabitScreen': { HabitScreen: 'HabitScreen' },
+		'../../assets/icon.png': 'bread-icon',
+	});
+	assert.match(text(render()), /Personal Tracker/);
+	assert.equal(nodes(render()).find((node) => node.type === 'Image').props.source, 'bread-icon');
+	nodes(render())
+		.find((node) => node.props.accessibilityLabel === 'Open Money')
+		.props.onPress();
+	let tree = render();
+	assert.equal(tree.type, 'BalanceScreen');
+	assert.equal(tree.props.money, money);
+	tree.props.onBack();
+	nodes(render())
+		.find((node) => node.props.accessibilityLabel === 'Open Habit Tracker')
+		.props.onPress();
+	tree = render();
+	assert.equal(tree.type, 'HabitScreen');
+	assert.equal(tree.props.habits, habits);
+	tree.props.onBack();
+	assert.match(text(render()), /Personal Tracker/);
+});
+
+test('Money dashboard provides a safe return to Personal Tracker', () => {
+	let returned = 0;
+	const render = screen('../src/screens/BalanceScreen.js', {
+		'./TrackerScreen': { TrackerScreen: 'TrackerScreen' },
+		'./MoneySourcesScreen': { MoneySourcesScreen: 'MoneySourcesScreen' },
+		'./AccountScreen': { AccountScreen: 'AccountScreen' },
+	});
+	const money = { data: { wallet: { sources: [] }, trackers: { items: [] } }, saving: false };
+	const props = { money, onBack: () => returned++ };
+	const back = (tree) =>
+		nodes(tree).find(
+			(node) => node.type === 'Pressable' && text(node).includes('< Personal Tracker'),
+		);
+	back(render(props)).props.onPress();
+	assert.equal(returned, 1);
+	money.saving = true;
+	assert.equal(back(render(props)).props.disabled, true);
+});
+
+function habitScreen(overrides = {}) {
+	const calls = [];
+	let confirmation;
+	const habits = {
+		data: {
+			version: 1,
+			habits: [
+				{
+					id: 'workout',
+					name: 'Workout',
+					kind: 'good',
+					days: [1, 2, 4, 5],
+					startDate: '2020-01-01',
+					completions: {},
+				},
+			],
+		},
+		loading: false,
+		saving: false,
+		error: null,
+		toggleDate: async (...args) => {
+			calls.push(args);
+			return { success: true };
+		},
+		removeHabit: async (id) => {
+			calls.push(['delete', id]);
+			return { success: true };
+		},
+		...overrides,
+	};
+	const renderScreen = screen('../src/screens/HabitScreen.js', {
+		'./HabitScreen': { HabitScreen: 'HabitScreen' },
+		'../components/HabitEditor': { HabitEditor: 'HabitEditor' },
+		'react-native': {
+			Alert: {
+				alert: (...args) => {
+					confirmation = args;
+				},
+			},
+		},
+	});
+	return {
+		habits,
+		calls,
+		render: () => renderScreen({ habits, onBack() {} }),
+		confirmation: () => confirmation,
+	};
+}
+
+test('weekly habit checkboxes use scheduled dates and show a completed goal', async () => {
+	const { shiftDate, weekStart } = require('../src/utils/habits');
+	const { todayDate } = require('../src/utils/trackers');
+	const ui = habitScreen();
+	nodes(ui.render())
+		.find((node) => node.props.accessibilityLabel === 'Previous week')
+		.props.onPress();
+	let tree = ui.render();
+	const boxes = nodes(tree).filter((node) => node.props.accessibilityRole === 'checkbox');
+	assert.equal(boxes.length, 4);
+	assert.equal(
+		boxes.every((node) => !node.props.disabled),
+		true,
+	);
+	const monday = shiftDate(weekStart(todayDate()), -7);
+	await boxes[0].props.onPress();
+	assert.deepEqual(ui.calls, [['workout', monday]]);
+	const habit = ui.habits.data.habits[0];
+	for (const offset of [0, 1, 3, 4])
+		habit.completions[shiftDate(monday, offset)] = '2026-11-13T10:00:00.000Z';
+	tree = ui.render();
+	assert.match(text(tree), /Goal completed! 4\/4 this week/);
+	assert.match(text(tree), /Check-ins this week/);
+	assert.equal(
+		nodes(tree)
+			.filter((node) => node.props.accessibilityRole === 'checkbox')
+			.every((node) => node.props.accessibilityState.checked),
+		true,
+	);
+});
+
+test('future habit days stay locked and bad habits use avoided wording', async () => {
+	const ui = habitScreen();
+	ui.habits.data.habits[0].kind = 'bad';
+	let tree = ui.render();
+	assert.match(text(tree), /Check when you avoided it/);
+	nodes(tree)
+		.find((node) => node.props.accessibilityLabel === 'Next week')
+		.props.onPress();
+	tree = ui.render();
+	const boxes = nodes(tree).filter((node) => node.props.accessibilityRole === 'checkbox');
+	assert.equal(boxes.length, 4);
+	assert.equal(
+		boxes.every((node) => node.props.disabled),
+		true,
+	);
+	assert.match(boxes[0].props.accessibilityLabel, /avoided/);
+});
+
+test('daily view shows only habits scheduled on the selected date', () => {
+	const ui = habitScreen();
+	ui.habits.data.habits[0].days = [1, 2, 3, 4, 5, 6, 0];
+	nodes(ui.render())
+		.find((node) => node.props.accessibilityRole === 'tab' && text(node) === 'Daily')
+		.props.onPress();
+	assert.equal(
+		nodes(ui.render()).filter((node) => node.props.accessibilityRole === 'checkbox').length,
+		1,
+	);
+	const day = new Date().getDay();
+	ui.habits.data.habits[0].days = [(day + 1) % 7];
+	assert.match(text(ui.render()), /No habits scheduled today/);
+});
+
+test('habit save errors remain visible and deletion requires confirmation', async () => {
+	const ui = habitScreen({ toggleDate: async () => ({ success: false, error: 'Storage full' }) });
+	nodes(ui.render())
+		.find((node) => node.props.accessibilityLabel === 'Previous week')
+		.props.onPress();
+	await nodes(ui.render())
+		.find((node) => node.props.accessibilityRole === 'checkbox')
+		.props.onPress();
+	assert.match(text(ui.render()), /Storage full/);
+	nodes(ui.render())
+		.find((node) => node.props.accessibilityLabel === 'Delete Workout')
+		.props.onPress();
+	assert.equal(ui.calls.length, 0);
+	await ui
+		.confirmation()[2]
+		.find((choice) => choice.text === 'Delete')
+		.onPress();
+	assert.deepEqual(ui.calls, [['delete', 'workout']]);
+});
+
+test('unreadable habit data offers retry without allowing edits', () => {
+	const ui = habitScreen({ data: null, error: 'Could not read saved habits.' });
+	assert.match(text(ui.render()), /Could not read saved habits/);
+	assert.match(text(ui.render()), /Try again/);
+	assert.doesNotMatch(text(ui.render()), /Add habit/);
+});
+
+test('habit editor defaults to four workout days and saves simple good/bad settings', async () => {
+	let saved;
+	const render = screen('../src/components/HabitEditor.js', {
+		'expo-crypto': { randomUUID: () => 'new-habit' },
+		'./TrackerForm': {
+			TrackerForm: 'TrackerForm',
+			TrackerField: 'TrackerField',
+			trackerFormStyles: {},
+		},
+	});
+	const props = {
+		saving: false,
+		onSave: async (value) => {
+			saved = value;
+			return { success: true };
+		},
+		onClose() {},
+	};
+	let tree = render(props);
+	assert.equal(
+		nodes(tree).filter(
+			(node) =>
+				node.props.accessibilityRole === 'checkbox' &&
+				node.props.accessibilityState.checked,
+		).length,
+		4,
+	);
+	nodes(tree)
+		.find((node) => node.type === 'TrackerField')
+		.props.onChangeText('Workout');
+	await render(props).props.onSave();
+	assert.equal(saved.id, 'new-habit');
+	assert.equal(saved.name, 'Workout');
+	assert.equal(saved.kind, 'good');
+	assert.deepEqual(Array.from(saved.days), [1, 2, 4, 5]);
+	tree = render(props);
+	nodes(tree)
+		.find(
+			(node) =>
+				node.props.accessibilityRole === 'radio' && text(node) === 'Avoid a bad habit',
+		)
+		.props.onPress();
+	nodes(render(props))
+		.find((node) => node.type === 'Pressable' && text(node) === 'Every day')
+		.props.onPress();
+	await render(props).props.onSave();
+	assert.equal(saved.kind, 'bad');
+	assert.equal(saved.days.length, 7);
+});
+
+test('habit editor keeps the form open on a failed save', async () => {
+	const render = screen('../src/components/HabitEditor.js', {
+		'expo-crypto': { randomUUID: () => 'new-habit' },
+		'./TrackerForm': {
+			TrackerForm: 'TrackerForm',
+			TrackerField: 'TrackerField',
+			trackerFormStyles: {},
+		},
+	});
+	const tree = render({ onSave: async () => ({ success: false, error: 'Pick a day.' }) });
+	await assert.rejects(tree.props.onSave(), /Pick a day/);
 });
 
 function accountScreen(overrides = {}) {

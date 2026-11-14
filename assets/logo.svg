@@ -1,11 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-	<title>Money Tracker wallet and coin</title>
-	<rect x="350" y="326" width="316" height="198" rx="28" transform="rotate(-12 508 425)" fill="#F5F3ED" />
-	<circle cx="610" cy="354" r="96" fill="#D5ED9C" stroke="#244B3B" stroke-width="14" />
-	<circle cx="610" cy="354" r="58" fill="none" stroke="#244B3B" stroke-width="12" />
-	<path d="M610 324v60" fill="none" stroke="#244B3B" stroke-width="16" stroke-linecap="round" />
-	<rect x="250" y="420" width="524" height="312" rx="58" fill="#D5ED9C" />
-	<path d="M294 468h360" fill="none" stroke="#244B3B" stroke-width="12" stroke-linecap="round" />
-	<rect x="610" y="506" width="164" height="126" rx="30" fill="#244B3B" stroke="#D5ED9C" stroke-width="12" />
-	<circle cx="658" cy="569" r="14" fill="#D5ED9C" />
+	<title>Personal Tracker bread</title>
+	<path d="M306 432c-65-18-92-70-72-121 22-57 90-83 153-65 61-56 189-56 250 0 63-18 131 8 153 65 20 51-7 103-72 121v264c0 41-28 68-68 68H374c-40 0-68-27-68-68Z" fill="#C88B4A" />
+	<path d="M354 403c-64-7-88-49-66-82 19-28 63-36 105-18 59-59 179-59 238 0 42-18 86-10 105 18 22 33-2 75-66 82v285c0 16-10 26-26 26H380c-16 0-26-10-26-26Z" fill="#F7DDA6" />
+	<path d="m423 373-19 65m119-78-19 65m119-52-19 65" fill="none" stroke="#C88B4A" stroke-width="22" stroke-linecap="round" />
+	<circle cx="440" cy="544" r="15" fill="#244B3B" />
+	<circle cx="584" cy="544" r="15" fill="#244B3B" />
+	<path d="M475 591q37 37 74 0" fill="none" stroke="#244B3B" stroke-width="16" stroke-linecap="round" />
 </svg>
