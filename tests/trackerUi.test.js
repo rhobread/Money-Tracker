@@ -499,6 +499,28 @@ test('habit save errors remain visible and deletion requires confirmation', asyn
 		.find((choice) => choice.text === 'Delete')
 		.onPress();
 	assert.deepEqual(ui.calls, [['delete', 'workout']]);
+	assert.doesNotMatch(text(ui.render()), /Storage full/);
+});
+
+test('successful habit settings saves clear an earlier checkbox error', async () => {
+	const ui = habitScreen({
+		toggleDate: async () => ({ success: false, error: 'Storage full' }),
+		saveHabit: async () => ({ success: true }),
+	});
+	nodes(ui.render())
+		.find((node) => node.props.accessibilityLabel === 'Previous week')
+		.props.onPress();
+	await nodes(ui.render())
+		.find((node) => node.props.accessibilityRole === 'checkbox')
+		.props.onPress();
+	assert.match(text(ui.render()), /Storage full/);
+	nodes(ui.render())
+		.find((node) => node.props.accessibilityLabel === 'Edit Workout')
+		.props.onPress();
+	await nodes(ui.render())
+		.find((node) => node.type === 'HabitEditor')
+		.props.onSave(ui.habits.data.habits[0]);
+	assert.doesNotMatch(text(ui.render()), /Storage full/);
 });
 
 test('unreadable habit data offers retry without allowing edits', () => {
@@ -571,7 +593,7 @@ test('habit editor keeps the form open on a failed save', async () => {
 	await assert.rejects(tree.props.onSave(), /Pick a day/);
 });
 
-function accountScreen(overrides = {}) {
+function accountScreen(overrides = {}, onHome) {
 	const calls = [];
 	let confirmation;
 	const session = {
@@ -620,6 +642,7 @@ function accountScreen(overrides = {}) {
 	const current = () =>
 		render({
 			session,
+			onHome,
 			onBack: () => {
 				calls.push(['back']);
 			},
@@ -681,6 +704,35 @@ test('account conflict resolution confirms exact remote version and keeps signou
 	assert.match(ui.message(), /Drive data is not deleted/);
 	await ui.confirm('Sign out');
 	assert.deepEqual(ui.calls[1], ['signOut']);
+});
+
+test('Money conflicts allow leaving for Personal Tracker without exposing financial editors', () => {
+	let homes = 0;
+	const ui = accountScreen({ conflict: { heads: [] } }, () => homes++);
+	const back = nodes(ui.current()).find(
+		(node) => node.type === 'Pressable' && text(node) === '< Personal Tracker',
+	);
+	assert.equal(back.props.disabled, false);
+	back.props.onPress();
+	assert.equal(homes, 1);
+	const render = screen('../src/screens/BalanceScreen.js', {
+		'./TrackerScreen': { TrackerScreen: 'TrackerScreen' },
+		'./MoneySourcesScreen': { MoneySourcesScreen: 'MoneySourcesScreen' },
+		'./AccountScreen': { AccountScreen: 'AccountScreen' },
+	});
+	const props = { money: ui.session, onBack: () => homes++ };
+	const tree = render(props);
+	assert.equal(tree.type, 'AccountScreen');
+	tree.props.onHome();
+	assert.equal(homes, 2);
+	assert.equal(render(props).type, 'AccountScreen');
+	ui.session.saving = true;
+	assert.equal(
+		nodes(ui.current()).find(
+			(node) => node.type === 'Pressable' && text(node) === '< Personal Tracker',
+		).props.disabled,
+		true,
+	);
 });
 
 test('unconfigured Google sign-in leaves device-only mode usable without loading native buttons', () => {

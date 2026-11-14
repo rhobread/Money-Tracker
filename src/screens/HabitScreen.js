@@ -70,6 +70,7 @@ export function HabitScreen({ habits, onBack }) {
 				text: 'Delete',
 				style: 'destructive',
 				onPress: async () => {
+					setActionError(null);
 					const result = await removeHabit(habit.id);
 					if (!result.success) setActionError(result.error);
 				},
@@ -374,7 +375,10 @@ export function HabitScreen({ habits, onBack }) {
 					habit={editor.id ? editor : null}
 					saving={saving}
 					onClose={() => setEditor(null)}
-					onSave={saveHabit}
+					onSave={(habit) => {
+						setActionError(null);
+						return saveHabit(habit);
+					}}
 				/>
 			)}
 		</SafeAreaView>

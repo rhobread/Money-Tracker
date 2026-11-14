@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme';
 
-export function AccountScreen({ session, onBack }) {
+export function AccountScreen({ session, onBack, onHome }) {
 	const {
 		account,
 		saving,
@@ -38,7 +38,9 @@ export function AccountScreen({ session, onBack }) {
 	}
 
 	function goBack() {
-		if (!saving && !conflict && !confirming.current) onBack();
+		if (saving || confirming.current) return;
+		if (conflict) onHome?.();
+		else onBack();
 	}
 
 	useEffect(() => {
@@ -92,11 +94,13 @@ export function AccountScreen({ session, onBack }) {
 			<ScrollView contentContainerStyle={styles.content}>
 				<Pressable
 					accessibilityRole="button"
-					disabled={saving || !!conflict}
+					disabled={saving || (!!conflict && !onHome)}
 					onPress={goBack}
 					style={styles.back}
 				>
-					<Text style={styles.link}>{'< Balance'}</Text>
+					<Text style={styles.link}>
+						{conflict && onHome ? '< Personal Tracker' : '< Balance'}
+					</Text>
 				</Pressable>
 				<Text style={styles.title}>Google Drive</Text>
 				<View style={styles.card}>

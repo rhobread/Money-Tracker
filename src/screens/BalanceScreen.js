@@ -38,7 +38,7 @@ export function BalanceScreen({ money, onBack, onEditingChange }) {
 	} = money;
 
 	if (page === 'account' || money.conflict) {
-		return <AccountScreen session={money} onBack={() => setPage(null)} />;
+		return <AccountScreen session={money} onBack={() => setPage(null)} onHome={onBack} />;
 	}
 
 	if (loading || loadError) {
