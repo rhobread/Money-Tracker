@@ -1,4 +1,4 @@
-const { validateFinanceData } = require('../utils/finance');
+const { validateAppData } = require('../utils/appData');
 
 function accountId(value) {
 	if (
@@ -125,7 +125,7 @@ function record(value, expectedId) {
 	return {
 		version: 1,
 		accountId: expectedId,
-		data: validateFinanceData(value.data),
+		data: validateAppData(value.data),
 		localRevision,
 		baseRevision,
 		dirty: value.dirty,
@@ -146,7 +146,7 @@ function snapshot(value, expectedId) {
 		revision,
 		parents: parents(value.parents, revision),
 		updatedAt: date(value.updatedAt),
-		data: validateFinanceData(value.data),
+		data: validateAppData(value.data),
 	};
 }
 
@@ -161,7 +161,7 @@ function canonical(value) {
 }
 
 function emptyData() {
-	return validateFinanceData({
+	return validateAppData({
 		version: 1,
 		wallet: { version: 3, currency: 'IDR', sources: [], updatedAt: null },
 		trackers: { version: 2, items: [] },

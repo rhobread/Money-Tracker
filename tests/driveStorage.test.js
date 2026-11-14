@@ -4,6 +4,7 @@ const vm = require('node:vm');
 const { transformFileSync } = require('@babel/core');
 const model = require('../src/services/cloudModel');
 const { createMoneySession } = require('../src/services/cloudSession');
+const { validateAppData } = require('../src/utils/appData');
 
 const DATE = '2026-11-12T00:00:00.000Z';
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -102,13 +103,14 @@ test('invalid metadata, incomplete lists, repeated pages, missing history and cy
 	await assert.rejects(drive.listHeads('A', 'secret'), /pagination/);
 });
 
-test('read validates expected account, metadata/body revision, parents and financial data', async () => {
+test('read validates expected account, metadata/body revision, parents, money and habits', async () => {
 	for (const value of [
 		{ ...body(), accountId: 'B' },
 		body('different'),
 		body('r1', ['unexpected-parent']),
 		{ ...body(), version: 2 },
 		{ ...body(), data: {} },
+		{ ...body(), data: { ...model.emptyData(), habits: null } },
 		{ ...body(), updatedAt: 'not-a-date' },
 	]) {
 		const drive = adapter(async () => ok(value));
@@ -205,6 +207,12 @@ test('invalid upload snapshots reject before HTTP; metadata supports at most 98 
 		return ok(file());
 	});
 	await assert.rejects(drive.writeSnapshot('A', 'token', { ...body(), accountId: 'B' }));
+	await assert.rejects(
+		drive.writeSnapshot('A', 'token', {
+			...body(),
+			data: { ...model.emptyData(), habits: null },
+		}),
+	);
 	await assert.rejects(
 		drive.writeSnapshot(
 			'A',
@@ -361,6 +369,9 @@ test('late invisible POST and retry after restart produce equivalent immutable c
 	};
 	const profile = { id: 'A', email: 'a@example.test', name: 'A' };
 	const storage = {
+		async loadAppData() {
+			return model.emptyData();
+		},
 		async loadActiveAccount() {
 			return profile;
 		},
@@ -421,4 +432,83 @@ test('late invisible POST and retry after restart produce equivalent immutable c
 	assert.equal(await historicalRestore.sync(), false);
 	assert.equal(historicalRestore.getState().data, before);
 	assert.match(historicalRestore.getState().syncError, /invalid or inconsistent/);
+});
+
+test('multipart upload and media restore round-trip the entire v2 habit payload inside a v1 snapshot', async () => {
+	const value = {
+		...body(),
+		data: validateAppData({
+			...model.emptyData(),
+			wallet: {
+				...model.emptyData().wallet,
+				sources: [{ id: 'bank', name: 'Bank', amountMinor: 1234 }],
+			},
+			habits: {
+				version: 1,
+				habits: [
+					{
+						id: 'read',
+						name: 'Read',
+						kind: 'good',
+						days: [1, 4],
+						startDate: '2026-01-01',
+						completions: { '2026-11-12': DATE },
+					},
+					{
+						id: 'avoid',
+						name: 'Avoid sweets',
+						kind: 'bad',
+						days: [1, 2, 3, 4, 5, 6, 0],
+						startDate: '2026-02-01',
+						completions: { '2026-11-11': '2026-11-11T18:30:00.000Z' },
+					},
+				],
+			},
+		}),
+	};
+	let uploaded;
+	const drive = adapter(async (url, options) => {
+		if (options.method === 'POST') {
+			uploaded = JSON.parse(options.body.split('\r\n\r\n')[2].split('\r\n')[0]);
+			return ok(file());
+		}
+		assert.match(url, /file-r1\?alt=media$/);
+		return ok(uploaded);
+	});
+	const node = await drive.writeSnapshot('A', 'token', value);
+	assert.deepEqual(uploaded, value);
+	assert.equal(uploaded.version, 1);
+	assert.equal(uploaded.data.version, 2);
+	assert.deepEqual(plain(await drive.readSnapshot('A', 'token', node)), value);
+});
+
+test('duplicate snapshots with identical money but different habit history are rejected', async () => {
+	const value = {
+		...body(),
+		data: {
+			...model.emptyData(),
+			habits: {
+				version: 1,
+				habits: [
+					{
+						id: 'read',
+						name: 'Read',
+						kind: 'good',
+						days: [4],
+						startDate: '2026-01-01',
+						completions: { '2026-11-12': DATE },
+					},
+				],
+			},
+		},
+	};
+	const drive = adapter(async (url) => {
+		if (!url.includes('alt=media'))
+			return ok({ files: [file('r1', [], 'one'), file('r1', [], 'two')] });
+		const copy = plain(value);
+		if (url.includes('/two?')) copy.data.habits.habits[0].completions = {};
+		return ok(copy);
+	});
+	const { heads } = await drive.listHeads('A', 'token');
+	await assert.rejects(drive.readSnapshot('A', 'token', heads[0]), /contents disagree/);
 });

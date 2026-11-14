@@ -16,7 +16,6 @@ const item = {
 };
 const initial = () => habits.upsertHabit(habits.createEmptyHabitData(), item);
 const plain = (value) => JSON.parse(JSON.stringify(value));
-const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function loadModule(path, modules) {
 	const exports = {};
@@ -29,7 +28,7 @@ function loadModule(path, modules) {
 		exports,
 		require(name) {
 			if (name in modules) return modules[name];
-			throw new Error(`Unexpected import (habits must stay device-only): ${name}`);
+			throw new Error(`Unexpected import: ${name}`);
 		},
 	});
 	return exports;
@@ -56,59 +55,29 @@ function storageHarness(initialValues = {}) {
 	return { values, reads, writes, native, api };
 }
 
-function hookHarness(storage) {
-	const states = [];
-	const refs = [];
-	const effects = [];
-	let stateIndex;
-	let refIndex;
-	let effectIndex;
-	const react = {
-		useState(initial) {
-			const index = stateIndex++;
-			if (!(index in states)) states[index] = initial;
-			return [
-				states[index],
-				(next) => {
-					states[index] = next;
-				},
-			];
-		},
-		useRef(initial) {
-			const index = refIndex++;
-			return refs[index] ?? (refs[index] = { current: initial });
-		},
-		useEffect(effect, dependencies) {
-			const index = effectIndex++;
-			assert.deepEqual(plain(dependencies), []);
-			effects[index] ??= { effect, cleanup: null };
-		},
-	};
-	const { useHabits } = loadModule('../src/hooks/useHabits.js', {
-		react,
-		'../storage/habitStorage': storage,
+function loadAdapter() {
+	return loadModule('../src/hooks/useHabits.js', {
 		'../utils/habits': habits,
-	});
-	return {
-		render(options) {
-			stateIndex = refIndex = effectIndex = 0;
-			return useHabits(options);
-		},
-		mount() {
-			for (const effect of effects) effect.cleanup = effect.effect();
-		},
-		unmount() {
-			for (const effect of effects) effect.cleanup?.();
-		},
-	};
+	}).useHabits;
 }
 
-async function mountedHook(storage) {
-	const hook = hookHarness(storage);
-	hook.render();
-	hook.mount();
-	await flush();
-	return hook;
+function sessionStub(overrides = {}) {
+	return {
+		data: { habits: initial() },
+		loading: false,
+		saving: false,
+		conflict: null,
+		loadError: null,
+		account: { id: 'account-a' },
+		dirty: false,
+		lastSyncedAt: NOW.toISOString(),
+		syncError: null,
+		reload: async () => true,
+		saveHabit: async () => true,
+		removeHabit: async () => true,
+		toggleDate: async () => true,
+		...overrides,
+	};
 }
 
 const mutations = (hook) => [
@@ -220,22 +189,18 @@ test('write failure propagates without removing or replacing the previous stored
 	assert.equal(storage.values.get(KEY), raw);
 });
 
-test('hook starts null, blocks all actions before load and synchronously blocks duplicate reloads', async () => {
-	let finishLoad;
-	let reads = 0;
-	let writes = 0;
-	const hook = hookHarness({
-		loadHabitData() {
-			reads++;
-			return new Promise((resolve) => {
-				finishLoad = resolve;
-			});
-		},
-		async saveHabitData() {
-			writes++;
+test('adapter projects shared habit data and account sync state, keeping reload unchanged', async () => {
+	const useHabits = loadAdapter();
+	let reloads = 0;
+	const session = sessionStub({
+		dirty: true,
+		syncError: 'Cloud sync is unavailable.',
+		reload: async () => {
+			reloads++;
+			return false;
 		},
 	});
-	const current = hook.render();
+	const current = useHabits(session);
 	assert.deepEqual(
 		Object.keys(current).sort(),
 		[
@@ -243,178 +208,173 @@ test('hook starts null, blocks all actions before load and synchronously blocks 
 			'loading',
 			'saving',
 			'error',
+			'account',
+			'dirty',
+			'lastSyncedAt',
+			'syncError',
 			'reload',
 			'saveHabit',
 			'removeHabit',
 			'toggleDate',
 		].sort(),
 	);
-	assert.equal(current.data, null);
-	assert.equal(current.loading, true);
+	assert.equal(current.data, session.data.habits);
+	assert.equal(current.loading, session.loading);
 	assert.equal(current.saving, false);
-	assert.equal(current.error, null);
-	for (const mutate of mutations(current)) assertFailure(await mutate());
-	hook.mount();
-	assertFailure(await current.reload(), /in progress/);
-	for (const mutate of mutations(current)) assertFailure(await mutate(), /in progress/);
-	assert.equal(reads, 1);
-	assert.equal(writes, 0);
-	finishLoad(initial());
-	await flush();
-	assert.equal(hook.render().loading, false);
-	assert.deepEqual(hook.render().data, initial());
+	assert.equal(current.error, session.loadError);
+	assert.equal(current.account, session.account);
+	assert.equal(current.dirty, session.dirty);
+	assert.equal(current.lastSyncedAt, session.lastSyncedAt);
+	assert.equal(current.syncError, session.syncError);
+	assert.equal(current.reload, session.reload);
+	assert.equal(reloads, 0);
+	assert.equal(await current.reload(), false);
+	assert.equal(reloads, 1);
 });
 
-test('one shared synchronous lock guards all actions and reload with no premature state update', async () => {
-	let finishSave;
-	const writes = [];
-	const hook = await mountedHook({
-		loadHabitData: async () => initial(),
-		saveHabitData(data) {
-			writes.push(data);
-			return new Promise((resolve) => {
-				finishSave = resolve;
-			});
+test('adapter delegates every mutation with original arguments and wraps successful booleans', async () => {
+	const useHabits = loadAdapter();
+	const calls = [];
+	const session = sessionStub({
+		saveHabit: (...args) => {
+			calls.push(['saveHabit', args]);
+			return true;
+		},
+		removeHabit: async (...args) => {
+			calls.push(['removeHabit', args]);
+			return true;
+		},
+		toggleDate: async (...args) => {
+			calls.push(['toggleDate', args]);
+			return true;
 		},
 	});
-	const stale = hook.render();
-	const committed = stale.data;
-	const pending = stale.toggleDate(item.id, '2024-03-12', NOW);
-	for (const mutate of mutations(stale)) assertFailure(await mutate(), /in progress/);
-	assertFailure(await stale.reload(), /in progress/);
-	assert.equal(writes.length, 1);
-	assert.equal(hook.render().saving, true);
-	assert.equal(hook.render().data, committed);
-	assert.deepEqual(committed.habits[0].completions, {});
-	finishSave();
-	assertSuccess(await pending);
-	assert.equal(hook.render().saving, false);
-	assert.equal(hook.render().data.habits[0].completions['2024-03-12'], NOW.toISOString());
+	const current = useHabits(session);
+	const before = plain(session.data);
+	for (const mutate of mutations(current)) assertSuccess(await mutate());
+	assert.deepEqual(calls, [
+		['saveHabit', [item]],
+		['removeHabit', [item.id]],
+		['toggleDate', [item.id, '2024-03-12', NOW]],
+	]);
+	assert.equal(calls[0][1][0], item);
+	assert.equal(calls[2][1][2], NOW);
+	assert.equal(current.data, session.data.habits);
+	assert.deepEqual(session.data, before);
 });
 
-test('stale callbacks read latest committed data across saves, toggles, history edits and removal', async () => {
-	const storage = storageHarness();
-	const hook = await mountedHook(storage.api);
-	const stale = hook.render();
-	assertSuccess(await stale.saveHabit(item));
-	assertSuccess(await stale.toggleDate(item.id, '2024-03-12', NOW));
-	assertSuccess(await stale.saveHabit({ ...item, days: [1], name: 'Gym' }));
-	assert.equal(hook.render().data.habits[0].name, 'Gym');
-	assert.equal(hook.render().data.habits[0].completions['2024-03-12'], NOW.toISOString());
-	assertSuccess(await stale.saveHabit({ ...item, id: 'reading', name: 'Read' }));
-	assertSuccess(await stale.removeHabit(item.id));
-	assert.deepEqual(
-		hook.render().data.habits.map(({ id }) => id),
-		['reading'],
-	);
-	assert.equal(storage.writes.length, 5);
-	assertSuccess(await stale.reload());
-	assert.equal(storage.writes.length, 5);
-	const restarted = await mountedHook(storage.api);
-	assert.deepEqual(restarted.render().data, hook.render().data);
+test('adapter turns false mutation results into nonempty errors without changing shared data', async () => {
+	const useHabits = loadAdapter();
+	for (const result of [false, Promise.resolve(false)]) {
+		let calls = 0;
+		const reject = () => {
+			calls++;
+			return result;
+		};
+		const session = sessionStub({ saveHabit: reject, removeHabit: reject, toggleDate: reject });
+		const current = useHabits(session);
+		const before = plain(session.data);
+		for (const mutate of mutations(current)) assertFailure(await mutate());
+		assert.equal(calls, 3);
+		assert.equal(current.data, session.data.habits);
+		assert.deepEqual(session.data, before);
+		assert.equal(useHabits(session).saving, false);
+		assert.equal(useHabits(session).error, null);
+	}
 });
 
-test('validation and save failures retain previous data, return errors, unlock and permit retry', async () => {
-	const storage = storageHarness({ [KEY]: JSON.stringify(initial()) });
-	const hook = await mountedHook(storage.api);
-	const stale = hook.render();
-	const committed = stale.data;
-	const setItem = storage.native.setItem;
-	storage.native.setItem = async () => {
-		throw new Error('Private disk error');
-	};
-	assertFailure(await stale.toggleDate(item.id, '2024-03-12', NOW), /Could not save/);
-	assert.equal(hook.render().data, committed);
-	assert.equal(hook.render().saving, false);
-	assert.doesNotMatch(hook.render().error, /Private disk/);
-	assert.deepEqual(JSON.parse(storage.values.get(KEY)), initial());
-	assertFailure(await stale.saveHabit({ ...item, days: [] }), /weekdays/);
-	assertFailure(await stale.toggleDate('missing', '2024-03-12', NOW), /not found/);
-	assertFailure(await stale.removeHabit('missing'), /not found/);
-	assert.equal(hook.render().data, committed);
-	assert.equal(hook.render().saving, false);
-	assert.equal(storage.writes.length, 0);
-	storage.native.setItem = setItem;
-	assertSuccess(await stale.toggleDate(item.id, '2024-03-12', NOW));
-	assert.equal(hook.render().error, null);
-	assert.equal(storage.writes.length, 1);
-	const restarted = await mountedHook(storage.api);
-	assert.equal(restarted.render().data.habits[0].completions['2024-03-12'], NOW.toISOString());
-	assertSuccess(await restarted.render().toggleDate(item.id, '2024-03-12', NOW));
-	assert.deepEqual((await storage.api.loadHabitData()).habits[0].completions, {});
-});
-
-test('load errors block every write until successful reload, even after prior successful load', async () => {
-	const storage = storageHarness({ [KEY]: '{corrupt' });
-	const hook = await mountedHook(storage.api);
-	const stale = hook.render();
-	assert.equal(stale.data, null);
-	assert.equal(stale.loading, false);
-	assert.match(stale.error, /Stored data has not been changed/);
-	for (const mutate of mutations(stale)) assertFailure(await mutate(), /Load habits/);
-	assert.equal(storage.values.get(KEY), '{corrupt');
-	assert.equal(storage.writes.length, 0);
-	storage.values.set(KEY, JSON.stringify(initial()));
-	assertSuccess(await stale.reload());
-	const committed = hook.render().data;
-	storage.values.set(KEY, '{corrupt again');
-	assertFailure(await stale.reload(), /Could not load/);
-	assert.equal(hook.render().data, committed);
-	for (const mutate of mutations(stale)) assertFailure(await mutate(), /Load habits/);
-	assert.match(hook.render().error, /Stored data has not been changed/);
-	assert.equal(storage.writes.length, 0);
-	storage.values.set(KEY, JSON.stringify(initial()));
-	assertSuccess(await stale.reload());
-	assert.equal(hook.render().error, null);
-	assertSuccess(await stale.toggleDate(item.id, '2024-03-12', NOW));
-	assert.equal(storage.writes.length, 1);
-});
-
-test('reload retains data until load completes and guards writes before the next render', async () => {
-	let finishLoad;
-	let load = async () => initial();
-	const storage = { loadHabitData: () => load(), saveHabitData: async () => {} };
-	const hook = await mountedHook(storage);
-	const stale = hook.render();
-	const committed = stale.data;
-	load = () =>
-		new Promise((resolve) => {
-			finishLoad = resolve;
-		});
-	const pending = stale.reload();
-	for (const mutate of mutations(stale)) assertFailure(await mutate(), /in progress/);
-	assert.equal(hook.render().data, committed);
-	assert.equal(hook.render().loading, true);
-	finishLoad(habits.createEmptyHabitData());
-	assertSuccess(await pending);
-	assert.deepEqual(hook.render().data, habits.createEmptyHabitData());
-});
-
-test('injected hook storage is captured once; effect replay does not duplicate in-flight loads', async () => {
-	let finishLoad;
-	let loads = 0;
-	const injected = {
-		loadHabitData() {
-			loads++;
-			return new Promise((resolve) => {
-				finishLoad = resolve;
+test('adapter catches synchronous throws and rejected mutations without exposing storage details', async () => {
+	const useHabits = loadAdapter();
+	for (const cause of [new Error('Private disk error: secret-path'), 'secret-path', null]) {
+		for (const asynchronous of [false, true]) {
+			const reject = () => {
+				if (asynchronous) return Promise.reject(cause);
+				throw cause;
+			};
+			const session = sessionStub({
+				saveHabit: reject,
+				removeHabit: reject,
+				toggleDate: reject,
 			});
+			const current = useHabits(session);
+			const before = plain(session.data);
+			for (const mutate of mutations(current)) {
+				const result = await mutate();
+				assertFailure(result);
+				assert.doesNotMatch(result.error, /Private disk|secret-path/);
+			}
+			assert.deepEqual(session.data, before);
+			assert.equal(useHabits(session).error, session.loadError);
+		}
+	}
+});
+
+test('adapter projects saving, conflicts and load errors as blocked while loading stays session-owned', () => {
+	const useHabits = loadAdapter();
+	for (const [overrides, saving] of [
+		[{}, false],
+		[{ saving: true }, true],
+		[{ conflict: { heads: ['local', 'remote'] } }, true],
+		[{ loadError: 'Could not load account data.' }, true],
+		[{ saving: true, conflict: {}, loadError: 'Reload required.' }, true],
+		[{ loading: true, data: null }, false],
+	]) {
+		const session = sessionStub(overrides);
+		const current = useHabits(session);
+		assert.equal(current.saving, saving);
+		assert.equal(current.loading, session.loading);
+		assert.equal(current.error, session.loadError);
+		assert.equal(current.data, session.data?.habits ?? null);
+		assert.equal(current.reload, session.reload);
+	}
+});
+
+test('adapter reflects updated data and switched accounts on the next call without retained state', async () => {
+	const useHabits = loadAdapter();
+	const session = sessionStub();
+	const first = useHabits(session);
+	const updated = habits.toggleHabitDate(initial(), item.id, '2024-03-12', NOW);
+	session.data = { habits: updated };
+	session.dirty = true;
+	session.lastSyncedAt = null;
+	const next = useHabits(session);
+	assert.equal(next.data, updated);
+	assert.equal(next.dirty, true);
+	assert.equal(next.lastSyncedAt, null);
+	assert.deepEqual(first.data.habits[0].completions, {});
+	let saves = 0;
+	const other = sessionStub({
+		account: { id: 'account-b' },
+		data: { habits: habits.createEmptyHabitData() },
+		saveHabit: async () => {
+			saves++;
+			return true;
 		},
-		saveHabitData: async () => {},
-	};
-	const unexpected = () => {
-		throw new Error('Must use injected storage');
-	};
-	const hook = hookHarness({ loadHabitData: unexpected, saveHabitData: unexpected });
-	hook.render({ storage: injected });
-	hook.mount();
-	hook.unmount();
-	hook.mount();
-	assert.equal(loads, 1);
-	finishLoad(initial());
-	await flush();
-	assert.deepEqual(hook.render().data, initial());
-	assertSuccess(await hook.render().removeHabit(item.id));
-	hook.unmount();
-	assertFailure(await hook.render().saveHabit(item), /not mounted/);
+	});
+	const switched = useHabits(other);
+	assert.equal(switched.account, other.account);
+	assert.equal(switched.data, other.data.habits);
+	assert.equal(switched.dirty, false);
+	assertSuccess(await switched.saveHabit(item));
+	assert.equal(saves, 1);
+	for (const data of [null, undefined, {}, { habits: null }]) {
+		const cleared = useHabits(sessionStub({ account: null, data }));
+		assert.equal(cleared.data, null);
+		assert.equal(cleared.account, null);
+	}
+});
+
+test('adapter performs no independent storage reads, writes, effects or automatic session calls', () => {
+	// The loader provides no React, storage, native or cloud modules to start side effects.
+	const useHabits = loadAdapter();
+	const unexpected = () => assert.fail('Rendering the adapter must not call session operations');
+	const session = sessionStub({
+		reload: unexpected,
+		saveHabit: unexpected,
+		removeHabit: unexpected,
+		toggleDate: unexpected,
+	});
+	for (let render = 0; render < 3; render++) {
+		assert.equal(useHabits(session).data, session.data.habits);
+	}
 });

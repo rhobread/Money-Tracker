@@ -1,4 +1,6 @@
 const finance = require('../utils/finance');
+const habits = require('../utils/habits');
+const { validateAppData, changeFinance, changeHabits } = require('../utils/appData');
 const model = require('./cloudModel');
 
 function createMoneySession({ storage, auth, drive, createRevision, now = () => new Date() }) {
@@ -16,6 +18,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 		revision: null,
 		conflict: null,
 		canImportGuest: false,
+		canImportHabits: false,
 	};
 	let current = null;
 	let loaded = false;
@@ -46,6 +49,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 			lastSyncedAt: record.lastSyncedAt,
 			conflict: record.conflict,
 			canImportGuest: false,
+			canImportHabits: false,
 			...extra,
 		});
 	}
@@ -87,11 +91,25 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 		uploadUpdatedAt: null,
 		conflict: null,
 	});
-	async function guestEligible(record, graph) {
-		if (graph.heads.length || record.dirty || record.localRevision !== null || record.conflict)
-			return false;
-		const guest = finance.validateFinanceData(await storage.loadMoneyData());
-		return guest.wallet.sources.length > 0 || guest.trackers.items.length > 0;
+	async function guestImports(record, graph) {
+		const unavailable = { canImportGuest: false, canImportHabits: false };
+		if (record.conflict) return unavailable;
+		let guest;
+		try {
+			guest = validateAppData(await storage.loadAppData());
+		} catch {
+			// An unreadable device backup must not prevent a valid account from syncing.
+			return unavailable;
+		}
+		const hasHabits = guest.habits.habits.length > 0;
+		return {
+			canImportGuest:
+				!graph.heads.length &&
+				!record.dirty &&
+				record.localRevision === null &&
+				(guest.wallet.sources.length > 0 || guest.trackers.items.length > 0 || hasHabits),
+			canImportHabits: !record.data.habits.habits.length && hasHabits,
+		};
 	}
 	const conflict = (
 		heads,
@@ -105,7 +123,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 	}
 	async function rememberConflict(record, marker) {
 		// Keep edits blocked even if the cache write fails; data changes only after persistence.
-		emit({ conflict: marker, canImportGuest: false });
+		emit({ conflict: marker, canImportGuest: false, canImportHabits: false });
 		await persist({ ...record, conflict: marker, lastSyncedAt: current.lastSyncedAt });
 		return false;
 	}
@@ -240,7 +258,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 					syncError: null,
 				});
 			} else {
-				const data = finance.validateFinanceData(await storage.loadMoneyData());
+				const data = validateAppData(await storage.loadAppData());
 				current = null;
 				emit({
 					account: null,
@@ -250,6 +268,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 					lastSyncedAt: null,
 					conflict: null,
 					canImportGuest: false,
+					canImportHabits: false,
 					syncError: null,
 				});
 			}
@@ -258,7 +277,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 		} catch {
 			emit({
 				loadError:
-					'Could not load your money data. Stored data has not been changed. Try again.',
+					'Could not load your tracker data. Stored data has not been changed. Try again.',
 			});
 			return false;
 		} finally {
@@ -269,7 +288,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 	async function commit(action, ...args) {
 		if (!loaded || state.loadError || state.conflict || !acquire()) return false;
 		try {
-			const data = action(state.data, ...args);
+			const data = validateAppData(await action(state.data, ...args));
 			if (current) {
 				await persist({
 					...current,
@@ -279,7 +298,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 					uploadUpdatedAt: timestamp(),
 				});
 			} else {
-				await storage.saveMoneyData(data);
+				await storage.saveAppData(data);
 				emit({ data });
 			}
 			return true;
@@ -317,7 +336,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 				syncError =
 					'Offline account cache loaded. Changes will sync when Google Drive is available.';
 			}
-			const canImportGuest = graph ? await guestEligible(record, graph) : false;
+			const imports = graph ? await guestImports(record, graph) : {};
 			if (result?.conflict) record = { ...record, lastSyncedAt: raw?.lastSyncedAt ?? null };
 			if (record.conflict && state.account?.id === profile.id)
 				emit({ conflict: record.conflict, canImportGuest: false });
@@ -328,7 +347,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 			setRecord(record, {
 				account: profile,
 				syncError,
-				canImportGuest,
+				...imports,
 				loadError: null,
 				loading: false,
 			});
@@ -341,7 +360,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 	async function signOut() {
 		if (!acquire({ authenticating: true })) return false;
 		try {
-			const data = finance.validateFinanceData(await storage.loadMoneyData());
+			const data = validateAppData(await storage.loadAppData());
 			await storage.saveActiveAccount(null);
 			current = null;
 			loaded = true;
@@ -353,6 +372,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 				lastSyncedAt: null,
 				conflict: null,
 				canImportGuest: false,
+				canImportHabits: false,
 				loadError: null,
 				loading: false,
 				syncError: null,
@@ -412,12 +432,12 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 				}
 			}
 			if (result.conflict) return await rememberConflict(result.record, result.conflict);
-			const canImportGuest = !result.conflict && (await guestEligible(result.record, graph));
+			const imports = await guestImports(result.record, graph);
 			await persist({
 				...result.record,
 				lastSyncedAt: result.conflict ? current.lastSyncedAt : timestamp(),
 			});
-			emit({ conflict: result.conflict, syncError: null, canImportGuest });
+			emit({ conflict: result.conflict, syncError: null, ...imports });
 			return !result.conflict;
 		} finally {
 			release();
@@ -427,7 +447,7 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 		if (!loaded || !current || !state.canImportGuest || state.conflict || !acquire())
 			return false;
 		try {
-			const data = finance.validateFinanceData(await storage.loadMoneyData());
+			const data = validateAppData(await storage.loadAppData());
 			await persist({
 				...current,
 				data,
@@ -439,6 +459,14 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 		} finally {
 			release();
 		}
+	}
+	async function importGuestHabits() {
+		if (!current || !state.canImportHabits) return false;
+		return commit(async (data) => {
+			if (data.habits.habits.length) throw new Error('This account already has habits.');
+			const guest = validateAppData(await storage.loadAppData());
+			return { ...data, habits: guest.habits };
+		});
 	}
 	async function resolveConflict(choice, revision) {
 		if (!loaded || !current || !state.conflict || !acquire({ syncing: true, syncError: null }))
@@ -497,10 +525,15 @@ function createMoneySession({ storage, auth, drive, createRevision, now = () => 
 		sync,
 		importGuest,
 		resolveConflict,
-		updateSources: (sources) => commit(finance.updateMoneySources, sources),
-		saveTracker: (tracker) => commit(finance.saveRecurringItem, tracker),
-		saveEntry: (id, key, entry) => commit(finance.saveRecurringEntry, id, key, entry),
-		deleteTracker: (id) => commit(finance.deleteRecurringItem, id),
+		updateSources: (sources) => commit(changeFinance, finance.updateMoneySources, sources),
+		saveTracker: (tracker) => commit(changeFinance, finance.saveRecurringItem, tracker),
+		saveEntry: (id, key, entry) =>
+			commit(changeFinance, finance.saveRecurringEntry, id, key, entry),
+		deleteTracker: (id) => commit(changeFinance, finance.deleteRecurringItem, id),
+		saveHabit: (habit) => commit(changeHabits, habits.upsertHabit, habit),
+		removeHabit: (id) => commit(changeHabits, habits.deleteHabit, id),
+		toggleDate: (id, date, now) => commit(changeHabits, habits.toggleHabitDate, id, date, now),
+		importGuestHabits,
 	};
 }
 

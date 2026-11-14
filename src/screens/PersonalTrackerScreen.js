@@ -5,14 +5,25 @@ import { useMoneyData } from '../hooks/useMoneyData';
 import { useHabits } from '../hooks/useHabits';
 import { BalanceScreen } from './BalanceScreen';
 import { HabitScreen } from './HabitScreen';
+import { AccountScreen } from './AccountScreen';
 import { colors } from '../theme';
 
 export function PersonalTrackerScreen() {
 	const [page, setPage] = useState(null);
 	const [syncPaused, setSyncPaused] = useState(false);
-	// Keep one money session alive when moving between sections.
+	// One session owns both domains, account isolation, and the shared save/sync lock.
 	const money = useMoneyData({ pauseSync: syncPaused });
-	const habits = useHabits();
+	const habits = useHabits(money);
+
+	if (page === 'account' || (page === 'habits' && money.conflict)) {
+		return (
+			<AccountScreen
+				session={money}
+				onBack={() => setPage(null)}
+				onHome={() => setPage(null)}
+			/>
+		);
+	}
 
 	if (page === 'money') {
 		return (
@@ -24,7 +35,14 @@ export function PersonalTrackerScreen() {
 		);
 	}
 	if (page === 'habits') {
-		return <HabitScreen habits={habits} onBack={() => setPage(null)} />;
+		return (
+			<HabitScreen
+				habits={habits}
+				onEditingChange={setSyncPaused}
+				onAccount={() => setPage('account')}
+				onBack={() => setPage(null)}
+			/>
+		);
 	}
 
 	return (
@@ -38,7 +56,7 @@ export function PersonalTrackerScreen() {
 					/>
 					<Text style={styles.byline}>RHOBREAD</Text>
 				</View>
-				<Text style={styles.title}>Personal Tracker</Text>
+				<Text style={styles.title}>Rho Tracker</Text>
 				<Text style={styles.intro}>A little more in order, one day at a time.</Text>
 				<Pressable
 					accessibilityRole="button"
@@ -69,6 +87,23 @@ export function PersonalTrackerScreen() {
 					<Text style={styles.habitTitle}>Habit Tracker</Text>
 					<Text style={styles.habitBody}>
 						Make time for the good.{'\n'}Keep a little distance from the bad.
+					</Text>
+				</Pressable>
+				<Pressable
+					accessibilityRole="button"
+					accessibilityLabel="Open Google Drive account"
+					onPress={() => setPage('account')}
+				>
+					<Text style={styles.footer}>
+						{money.account
+							? money.conflict
+								? 'Google Drive: resolve a sync conflict'
+								: money.syncError
+									? 'Google Drive: sync needs attention'
+									: money.dirty
+										? 'Google Drive: changes waiting to sync'
+										: 'Google Drive: account and sync status'
+							: 'Device only: connect Google Drive to back up your data'}
 					</Text>
 				</Pressable>
 				<Text style={styles.footer}>Small steps count.</Text>

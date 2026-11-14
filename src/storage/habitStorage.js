@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createEmptyHabitData, validateHabitData } from '../utils/habits';
 
-// Device-only. This key is intentionally separate from all money/Google sync data.
+// Legacy device-only backup, read during migration into the combined app store.
 const STORAGE_KEY = '@personal-tracker/habits';
 
 export async function loadHabitData(storage = AsyncStorage) {

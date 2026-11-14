@@ -50,7 +50,7 @@ export function BalanceScreen({ money, onBack, onEditingChange }) {
 					onPress={onBack}
 					style={styles.back}
 				>
-					<Text style={styles.edit}>{'< Personal Tracker'}</Text>
+					<Text style={styles.edit}>{'< Rho Tracker'}</Text>
 				</Pressable>
 				{loading ? (
 					<ActivityIndicator size="large" color={colors.green} />
@@ -117,7 +117,7 @@ export function BalanceScreen({ money, onBack, onEditingChange }) {
 					onPress={onBack}
 					style={styles.back}
 				>
-					<Text style={styles.edit}>{'< Personal Tracker'}</Text>
+					<Text style={styles.edit}>{'< Rho Tracker'}</Text>
 				</Pressable>
 				<Text style={styles.title}>Money</Text>
 				<Pressable

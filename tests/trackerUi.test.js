@@ -320,17 +320,23 @@ test('cloud conflicts force the account screen before displaying editable money 
 	);
 });
 
-test('Personal Tracker opens Money and Habits and keeps the same shared sessions', () => {
+test('Rho Tracker opens Money and Habits using one shared account session', () => {
 	const money = { data: null, loading: true };
 	const habits = { data: null, loading: true };
 	const render = screen('../src/screens/PersonalTrackerScreen.js', {
 		'../hooks/useMoneyData': { useMoneyData: () => money },
-		'../hooks/useHabits': { useHabits: () => habits },
+		'../hooks/useHabits': {
+			useHabits: (session) => {
+				assert.equal(session, money);
+				return habits;
+			},
+		},
 		'./BalanceScreen': { BalanceScreen: 'BalanceScreen' },
 		'./HabitScreen': { HabitScreen: 'HabitScreen' },
+		'./AccountScreen': { AccountScreen: 'AccountScreen' },
 		'../../assets/icon.png': 'bread-icon',
 	});
-	assert.match(text(render()), /Personal Tracker/);
+	assert.match(text(render()), /Rho Tracker/);
 	assert.equal(nodes(render()).find((node) => node.type === 'Image').props.source, 'bread-icon');
 	nodes(render())
 		.find((node) => node.props.accessibilityLabel === 'Open Money')
@@ -346,10 +352,10 @@ test('Personal Tracker opens Money and Habits and keeps the same shared sessions
 	assert.equal(tree.type, 'HabitScreen');
 	assert.equal(tree.props.habits, habits);
 	tree.props.onBack();
-	assert.match(text(render()), /Personal Tracker/);
+	assert.match(text(render()), /Rho Tracker/);
 });
 
-test('Money dashboard provides a safe return to Personal Tracker', () => {
+test('Money dashboard provides a safe return to Rho Tracker', () => {
 	let returned = 0;
 	const render = screen('../src/screens/BalanceScreen.js', {
 		'./TrackerScreen': { TrackerScreen: 'TrackerScreen' },
@@ -360,12 +366,38 @@ test('Money dashboard provides a safe return to Personal Tracker', () => {
 	const props = { money, onBack: () => returned++ };
 	const back = (tree) =>
 		nodes(tree).find(
-			(node) => node.type === 'Pressable' && text(node).includes('< Personal Tracker'),
+			(node) => node.type === 'Pressable' && text(node).includes('< Rho Tracker'),
 		);
 	back(render(props)).props.onPress();
 	assert.equal(returned, 1);
 	money.saving = true;
 	assert.equal(back(render(props)).props.disabled, true);
+});
+
+test('home and habit navigation expose account status and route habit conflicts to resolution', () => {
+	const money = { data: null, loading: false, account: { id: 'A' }, dirty: true };
+	const render = screen('../src/screens/PersonalTrackerScreen.js', {
+		'../hooks/useMoneyData': { useMoneyData: () => money },
+		'../hooks/useHabits': { useHabits: () => ({}) },
+		'./BalanceScreen': { BalanceScreen: 'BalanceScreen' },
+		'./HabitScreen': { HabitScreen: 'HabitScreen' },
+		'./AccountScreen': { AccountScreen: 'AccountScreen' },
+		'../../assets/icon.png': 'bread-icon',
+	});
+	assert.match(text(render()), /changes waiting to sync/);
+	nodes(render())
+		.find((node) => node.props.accessibilityLabel === 'Open Google Drive account')
+		.props.onPress();
+	assert.equal(render().type, 'AccountScreen');
+	render().props.onHome();
+	nodes(render())
+		.find((node) => node.props.accessibilityLabel === 'Open Habit Tracker')
+		.props.onPress();
+	assert.equal(render().type, 'HabitScreen');
+	assert.equal(typeof render().props.onEditingChange, 'function');
+	money.conflict = { heads: [] };
+	assert.equal(render().type, 'AccountScreen');
+	assert.equal(render().props.session, money);
 });
 
 function habitScreen(overrides = {}) {
@@ -412,7 +444,7 @@ function habitScreen(overrides = {}) {
 	return {
 		habits,
 		calls,
-		render: () => renderScreen({ habits, onBack() {} }),
+		render: (props = {}) => renderScreen({ habits, onBack() {}, ...props }),
 		confirmation: () => confirmation,
 	};
 }
@@ -530,6 +562,43 @@ test('unreadable habit data offers retry without allowing edits', () => {
 	assert.doesNotMatch(text(ui.render()), /Add habit/);
 });
 
+test('habit editors and delete confirmations pause shared sync and cancellation resumes it', () => {
+	const ui = habitScreen();
+	let paused;
+	const props = {
+		onEditingChange: (value) => {
+			paused = value;
+		},
+	};
+	assert.match(text(ui.render(props)), /Device only/);
+	nodes(ui.render(props))
+		.find((node) => node.props.accessibilityLabel === 'Edit Workout')
+		.props.onPress();
+	assert.equal(paused, false);
+	let tree = ui.render(props);
+	assert.equal(paused, true);
+	nodes(tree)
+		.find((node) => node.type === 'HabitEditor')
+		.props.onClose();
+	tree = ui.render(props);
+	assert.equal(paused, false);
+	nodes(tree)
+		.find((node) => node.props.accessibilityLabel === 'Delete Workout')
+		.props.onPress();
+	ui.render(props);
+	assert.equal(paused, true);
+	ui.confirmation()[2]
+		.find((choice) => choice.text === 'Cancel')
+		.onPress();
+	ui.render(props);
+	assert.equal(paused, false);
+	ui.habits.account = { id: 'A' };
+	ui.habits.dirty = true;
+	assert.match(text(ui.render(props)), /Waiting to sync habits/);
+	ui.habits.syncError = 'Offline';
+	assert.match(text(ui.render(props)), /sync needs attention/);
+});
+
 test('habit editor defaults to four workout days and saves simple good/bad settings', async () => {
 	let saved;
 	const render = screen('../src/components/HabitEditor.js', {
@@ -606,6 +675,7 @@ function accountScreen(overrides = {}, onHome) {
 		syncError: null,
 		conflict: null,
 		canImportGuest: false,
+		canImportHabits: false,
 		googleAvailability: { available: true, reason: null },
 		signIn: async () => {
 			calls.push(['signIn']);
@@ -617,6 +687,10 @@ function accountScreen(overrides = {}, onHome) {
 		},
 		importGuest: async () => {
 			calls.push(['importGuest']);
+			return true;
+		},
+		importGuestHabits: async () => {
+			calls.push(['importGuestHabits']);
 			return true;
 		},
 		signOut: async () => {
@@ -678,6 +752,20 @@ test('account controls connect Google, sync manually, and confirm device data im
 	assert.match(text(tree), /Waiting to sync/);
 });
 
+test('existing money accounts can confirm habit-only import without replacing money', async () => {
+	const ui = accountScreen({ canImportHabits: true, canImportGuest: false });
+	const tree = ui.current();
+	assert.match(text(tree), /Money and Habits/);
+	nodes(tree)
+		.find((node) => node.type === 'Pressable' && text(node) === 'Copy device-only habits')
+		.props.onPress();
+	assert.match(ui.message(), /a@example\.test/);
+	assert.match(ui.message(), /balances and payments will not change/);
+	assert.equal(ui.calls.length, 0);
+	await ui.confirm('Copy habits');
+	assert.deepEqual(ui.calls, [['importGuestHabits']]);
+});
+
 test('account conflict resolution confirms exact remote version and keeps signout available', async () => {
 	const ui = accountScreen({
 		conflict: {
@@ -706,11 +794,11 @@ test('account conflict resolution confirms exact remote version and keeps signou
 	assert.deepEqual(ui.calls[1], ['signOut']);
 });
 
-test('Money conflicts allow leaving for Personal Tracker without exposing financial editors', () => {
+test('account conflicts allow leaving for Rho Tracker without exposing financial editors', () => {
 	let homes = 0;
 	const ui = accountScreen({ conflict: { heads: [] } }, () => homes++);
 	const back = nodes(ui.current()).find(
-		(node) => node.type === 'Pressable' && text(node) === '< Personal Tracker',
+		(node) => node.type === 'Pressable' && text(node) === '< Rho Tracker',
 	);
 	assert.equal(back.props.disabled, false);
 	back.props.onPress();
@@ -729,7 +817,7 @@ test('Money conflicts allow leaving for Personal Tracker without exposing financ
 	ui.session.saving = true;
 	assert.equal(
 		nodes(ui.current()).find(
-			(node) => node.type === 'Pressable' && text(node) === '< Personal Tracker',
+			(node) => node.type === 'Pressable' && text(node) === '< Rho Tracker',
 		).props.disabled,
 		true,
 	);

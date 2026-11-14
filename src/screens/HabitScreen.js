@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
 	ActivityIndicator,
 	Alert,
@@ -23,17 +23,24 @@ function displayDate(date) {
 	});
 }
 
-export function HabitScreen({ habits, onBack }) {
+export function HabitScreen({ habits, onBack, onAccount, onEditingChange }) {
 	const [mode, setMode] = useState('weekly');
 	const [anchor, setAnchor] = useState(todayDate());
 	const [today, setToday] = useState(todayDate());
 	const [editor, setEditor] = useState(null);
 	const [actionError, setActionError] = useState(null);
+	const [confirming, setConfirming] = useState(false);
+	const confirmingRef = useRef(false);
 	const { data, loading, saving, error, reload, saveHabit, removeHabit, toggleDate } = habits;
+
+	useLayoutEffect(() => {
+		onEditingChange?.(!!editor || confirming);
+		return () => onEditingChange?.(false);
+	}, [editor, confirming, onEditingChange]);
 
 	useEffect(() => {
 		const back = BackHandler.addEventListener('hardwareBackPress', () => {
-			if (editor || saving) return true;
+			if (editor || saving || confirmingRef.current) return true;
 			onBack();
 			return true;
 		});
@@ -64,18 +71,31 @@ export function HabitScreen({ habits, onBack }) {
 	}
 
 	function confirmDelete(habit) {
-		Alert.alert('Delete habit?', `Remove ${habit.name} and its check-ins?`, [
-			{ text: 'Cancel', style: 'cancel' },
-			{
-				text: 'Delete',
-				style: 'destructive',
-				onPress: async () => {
-					setActionError(null);
-					const result = await removeHabit(habit.id);
-					if (!result.success) setActionError(result.error);
+		if (saving || confirmingRef.current) return;
+		confirmingRef.current = true;
+		setConfirming(true);
+		function dismiss() {
+			confirmingRef.current = false;
+			setConfirming(false);
+		}
+		Alert.alert(
+			'Delete habit?',
+			`Remove ${habit.name} and its check-ins?`,
+			[
+				{ text: 'Cancel', style: 'cancel', onPress: dismiss },
+				{
+					text: 'Delete',
+					style: 'destructive',
+					onPress: async () => {
+						dismiss();
+						setActionError(null);
+						const result = await removeHabit(habit.id);
+						if (!result.success) setActionError(result.error);
+					},
 				},
-			},
-		]);
+			],
+			{ cancelable: false },
+		);
 	}
 
 	return (
@@ -83,17 +103,33 @@ export function HabitScreen({ habits, onBack }) {
 			<ScrollView contentContainerStyle={styles.content}>
 				<Pressable
 					accessibilityRole="button"
-					disabled={saving}
+					disabled={saving || confirming || !!editor}
 					onPress={onBack}
 					style={styles.back}
 				>
-					<Text style={styles.link}>{'< Personal Tracker'}</Text>
+					<Text style={styles.link}>{'< Rho Tracker'}</Text>
 				</Pressable>
 				<Text style={styles.title}>Habit Tracker</Text>
 				<Text style={styles.intro}>Good habits to build. Bad habits to leave behind.</Text>
 				<Text style={styles.storage}>
-					Saved on this device. Google Drive sync is for Money only.
+					{habits.account
+						? habits.syncError
+							? 'Saved locally. Google Drive sync needs attention.'
+							: habits.dirty
+								? 'Saved locally. Waiting to sync habits with Google Drive.'
+								: "Habits are included in this account's Google Drive sync."
+						: 'Device only. Connect Google Drive and copy your data to back it up.'}
 				</Text>
+				{onAccount && (
+					<Pressable
+						accessibilityRole="button"
+						disabled={saving || confirming || !!editor}
+						onPress={onAccount}
+						style={styles.back}
+					>
+						<Text style={styles.link}>Google Drive / account status</Text>
+					</Pressable>
+				)}
 				{loading ? (
 					<ActivityIndicator color={colors.green} size="large" />
 				) : !data ? (

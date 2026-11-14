@@ -1,8 +1,8 @@
-# How Personal Tracker Works
+# How Rho Tracker Works
 
 A guide to this project **without assuming you already know React**.
 
-> **Start here:** The home screen is [src/screens/PersonalTrackerScreen.js](src/screens/PersonalTrackerScreen.js). Open **Money** for the existing balance, income, payments, and Google Drive controls, or **Habit Tracker** for daily and weekly habit checklists. Sign-in is optional and only applies to Money. The rest of this guide describes the existing Money section.
+> **Start here:** The home screen is [src/screens/PersonalTrackerScreen.js](src/screens/PersonalTrackerScreen.js). Open **Money** for balance, income, and payments, or **Habit Tracker** for daily and weekly habit checklists. Optional Google Drive sign-in applies to both sections. Google Drive controls are also available on the home screen. The rest of this guide focuses on the Money section.
 
 ## Contents
 
@@ -56,9 +56,9 @@ export default function App() {
 
 - **`SafeAreaProvider`** supports keeping content clear of the phone's notch and system bars.
 - **`StatusBar`** controls the appearance of the phone's top status bar.
-- **`PersonalTrackerScreen`** is the home screen. It keeps one Money session alive while you move between sections and owns a separate habit store.
+- **`PersonalTrackerScreen`** is the home screen. It keeps one shared account session alive while you move between sections. `useHabits` adapts the habit slice of that same session rather than opening another store.
 
-The home screen opens immediately. Each section shows a **loading spinner** while reading its saved data. If loading fails, that section shows an error and a **Try again** button instead of overwriting your data. Habits use the separate `@personal-tracker/habits` device-storage key and do not change Money data or Google Drive snapshots.
+The home screen opens immediately. Each section shows a **loading spinner** while reading the saved aggregate. If loading fails, editing is blocked and **Try again** reloads without overwriting data. Money and Habits save atomically and share account isolation, dirty revisions, conflict handling, and Google Drive snapshots. The old `@personal-tracker/habits` key remains an untouched migration backup.
 
 ## 2. The Tools We Use
 
@@ -180,7 +180,7 @@ A function passed to something else to call later is a **callback**. `onPress` r
 | `useEffect` | Runs work after rendering, including the initial storage load. |
 | `useRef` | Holds a value without triggering an interface update; used to block repeated actions. |
 
-`useMoneyData` is a **custom hook**: a reusable function built using React's hooks. The dashboard calls it once and passes data and save functions to the other screens. It subscribes to `cloudSession.js`, the controller managing device-only/account data and one shared save/sync lock. Financial changes still go through `finance.js`.
+`useMoneyData` is a **custom hook**: a reusable function built using React's hooks. The home screen calls it once and passes data and save functions to both sections. Despite its historical name, it subscribes to `cloudSession.js` for the complete application dataset and one shared save/sync lock. `appData.js` separates finance transformations from habit transformations so neither discards the other domain.
 
 For example, this hook starts loading saved data when it is first mounted:
 
@@ -220,7 +220,7 @@ Inside `TrackerScreen`, **`selectedId`** determines whether you see the item lis
 
 Editing forms appear in **modals**, over the current screen.
 
-A sync conflict also opens `AccountScreen`, so you choose a complete version before making more money edits. The money screens tell the hook when a form/delete confirmation is open; automatic sync pauses so it cannot replace a draft's values.
+A sync conflict also opens `AccountScreen`, so you choose a complete Money and Habits version before making more edits. Both sections tell the hook when a form/delete confirmation is open; automatic sync pauses so it cannot replace a draft's values.
 
 ## 8. How The Balance Is Calculated
 
@@ -269,15 +269,19 @@ cloudSession.js
     Chooses device-only/account storage and guards saves/sync/account changes
         |
         v
-finance.js
-    Validates changes and calculates balance adjustments
+appData.js
+    Validates the versioned aggregate and preserves the other domain
         |
         v
-moneyStorage.js
-    Saves device-only wallet and trackers together using AsyncStorage
+finance.js / habits.js
+    Calculate balance adjustments or validate habit/check-in changes
+        |
+        v
+appStorage.js
+    Saves device-only Money and Habits together using AsyncStorage
 
 cloudStorage.js
-    Saves the same complete data in a separate envelope for each Google account
+    Saves the same complete Money and Habits data in a separate envelope for each account
 ```
 
 When you save a source:
@@ -298,8 +302,10 @@ Marking an income/payment entry paid goes through the same hook. `finance.js` ca
 
 | Storage key | Contents |
 | --- | --- |
-| `@money-tracker/data` | Current wallet and income/payment schedules, paid entries, source selections, and recorded balance changes. |
-| `@money-tracker/account/<Google subject ID>` | Separate account cache with the same complete money data and sync state. The ID is URL-encoded in the key. |
+| `@rho-tracker/data` | Current version-2 Money and Habits aggregate, including paid entries, source selections, balance changes, and habit check-ins. |
+| `@money-tracker/data` | Previous finance aggregate, read only during migration and retained as a backup. |
+| `@personal-tracker/habits` | Previous device habits, read only during migration and retained as a backup. |
+| `@money-tracker/account/<Google subject ID>` | Separate account cache with the same complete Money and Habits data and sync state. The ID is URL-encoded in the key. |
 | `@money-tracker/active-account` | Which Google profile is active. Display metadata only, not access tokens. |
 | `@money-tracker/wallet` | Older balance data, read only when migrating and kept untouched afterward. |
 | `@money-tracker/trackers` | Older tracker data, read only when migrating and kept untouched afterward. |
@@ -308,7 +314,7 @@ On the first load after upgrading, older data is migrated in memory without writ
 
 **`JSON.stringify(...)`** converts an object into a JSON string for saving. **`JSON.parse(...)`** turns that string back into a JavaScript value when loading.
 
-> **Storage limits:** This is app-private storage, not a visible JSON file in Downloads. It persists between launches, but is not encrypted or backed up by this app. Clearing app storage or uninstalling can delete it. In Expo Go, the data lives within Expo Go's storage.
+> **Storage limits:** This is app-private storage, not a visible JSON file in Downloads. It is not encrypted. Google Drive backup is optional and only covers explicitly copied/account-scoped data after successful sync. Clearing app storage or uninstalling can delete unsynced or device-only data. In Expo Go, data lives within Expo Go's storage.
 
 ## 10. How Repeating Entries Work
 
@@ -371,7 +377,8 @@ Paid entries keep their chosen source even if the item's default changes. The ne
 | Live thousands dots and manual decimal input | [AmountInput.js](src/components/AmountInput.js) |
 | Default and per-entry source picker | [MoneySourcePicker.js](src/components/MoneySourcePicker.js) |
 | Shared balance/tracker loading and saving state | [useMoneyData.js](src/hooks/useMoneyData.js) |
-| Combined JSON storage and migration | [moneyStorage.js](src/storage/moneyStorage.js) |
+| Combined JSON storage and migration | [appStorage.js](src/storage/appStorage.js) |
+| Versioned Money and Habits data boundary | [appData.js](src/utils/appData.js) |
 | Account cache and active profile storage | [cloudStorage.js](src/storage/cloudStorage.js) |
 | Offline/account/sync coordination | [cloudSession.js](src/services/cloudSession.js) |
 | Google sign-in and identity verification | [googleAuth.js](src/services/googleAuth.js) |
@@ -412,7 +419,9 @@ Sign in with Google
     -> Restore its current complete dataset, or ask about conflicting versions
 ```
 
-**Existing device-only data is never silently assigned to a Google account.** A new empty account offers **Copy device-only data**, with confirmation. Signing into another account opens that account's data, not the previous account's data. Signing out returns to your separate device-only copy and retains account caches/unsynced edits.
+**Existing device-only data is never silently assigned to a Google account.** A new empty account offers **Copy device-only data**, with confirmation. Existing Money accounts with no habits offer **Copy device-only habits**, which preserves their Money data. Signing into another account switches both Money and Habits, not just balances. Signing out returns to the separate device-only copy and retains account caches/unsynced edits.
+
+The payload uses app schema version 2. Legacy finance-only snapshots load with empty habits, and old installed apps reject the new version instead of silently removing habits. Keep all devices on the upgraded build. Snapshot/cache envelopes and Drive ownership metadata retain their original version/namespace to preserve existing history.
 
 ### Why Save Locally First?
 

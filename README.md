@@ -1,8 +1,8 @@
-# Personal Tracker
+# Rho Tracker
 
-A simple personal tracker built with Expo and JavaScript, with a bread logo and two sections: **Money** and **Habit Tracker**. Money keeps the existing balance, recurring income, and payments in Indonesian rupiah (IDR), including optional Google Drive sync. Habits save separately on this device for now.
+A personal tracker built with Expo and JavaScript, with a bread logo and two sections: **Money** and **Habit Tracker**. Money tracks balance, recurring income, and payments in Indonesian rupiah (IDR). Optional Google Drive sync covers both Money and Habits, including check-in history.
 
-The visible app name is Personal Tracker. Existing app IDs, storage keys, and the GitHub URL stay unchanged so installs, Google sign-in, and portfolio links keep working. Suggested future repository name: `rhobread-tracker`.
+The visible app name is Rho Tracker. Existing native app IDs, OAuth redirect scheme, Google Drive namespace, and account storage keys stay unchanged so upgrades and Google sign-in keep working. The npm package still uses the historical `money-tracker` name; it is not the app's display name.
 
 ## Habits
 
@@ -15,7 +15,9 @@ The visible app name is Personal Tracker. Existing app IDs, storage keys, and th
 
 New habits start at the beginning of the current week. You can check today or a past scheduled day, but not future days. Each check-in stores both the habit date and the time it was checked. Unchecking removes that check-in. Bad habits use an unchecked day for an occurrence or a day not yet checked; this first version does not distinguish the two.
 
-Habits are device-only and separate from Money accounts. They are **not included in Google Drive sync**, account import, or Money conflict resolution. Clearing app data or uninstalling can erase them.
+Habits and Money share the active account and sync status. In device-only mode they remain local until explicitly copied to a Google account. In account mode they save locally first and sync together as one complete snapshot. A conflict choice replaces both Money and Habits; it is not a merge. Clearing app data or uninstalling can erase unsynced changes.
+
+Existing device habits are not automatically assigned to an account. For an empty account, use **Copy device-only data**. If your account already has Money but no habits, use **Copy device-only habits** to preserve its balances and payments. This is available in **Google Drive** on the home screen or within either section. Copying never deletes the separate device-only data, and importing habits is disabled once the account has habits to avoid overwriting history.
 
 ## Requirements
 
@@ -33,7 +35,7 @@ You do not need Android Studio or Xcode to run the app on a physical phone using
 Open a terminal in the project folder. On Windows PowerShell:
 
 ```powershell
-cd "C:\Personal Projects\Money Tracker"
+cd "C:\Personal Projects\Rho-Tracker"
 ```
 
 ### 2. Install dependencies
@@ -63,7 +65,7 @@ To stop the development server, press `Ctrl+C` in the terminal. To run it again 
 
 ## Use The App
 
-1. Open **Money** from Personal Tracker, then tap the **Current balance** card to open the **Money Sources** screen. Use **< Balance** or Android's back button to return.
+1. Open **Money** from Rho Tracker, then tap the **Current balance** card to open the **Money Sources** screen. Use **< Balance** or Android's back button to return.
 2. Tap **Add source** and enter a name, such as Bank A or Cash.
 3. Enter its amount in IDR. Thousands dots appear automatically as you type: `1000` becomes `1.000`, and `1000000` becomes `1.000.000`. Enter a comma yourself for up to two decimal places, for example `1.250,50`. Negative source balances are supported.
 4. Tap **Save**. Bank A with 1000 and Bank B with 2000 produce a current balance of 3000.
@@ -117,15 +119,17 @@ Drive files live in its **private app-data folder**, not ordinary My Drive folde
 
 ### How It Behaves
 
-1. Open **Google Drive** on the dashboard and select **Sign in with Google**.
+1. Open **Google Drive** on the home screen or Money dashboard and select **Sign in with Google**.
 2. If that account already has Drive data, it is restored automatically, unless local edits conflict with it.
-3. If the account is new, it starts empty. **Copy device-only data** explicitly copies your existing balances and trackers to that account. The original device-only copy is kept.
+3. If the account is new, it starts empty. **Copy device-only data** explicitly copies your existing balances, trackers, habits, and check-ins to that account. For an existing Money account with no habits, **Copy device-only habits** copies just habits and check-ins. The original device-only copy is kept.
 4. Changes save locally first. Sync runs after changes, on account activation, and when the app returns to the foreground. Use **Sync now** to retry after going online.
 5. Offline changes stay queued in that account's local cache. Network errors never replace data with an empty dataset.
 6. If two devices changed the same starting version, choose **Use this device version** or a specific **Drive version**. This is a whole-data choice, not a merge. Choosing a Drive version replaces unsynced local edits only after confirmation. Unresolved conflicts remain blocked after restarting or switching accounts; **Sync now** can check whether another device already resolved them.
 7. **Sign out / use device-only data** returns to your separate device-only dataset. It does not delete account caches, queued edits, or Drive files. Signing into another account never copies the previous account's data into it.
 
-Sync is paused while a money editor or delete confirmation is open, so a downloaded version cannot overwrite an unfinished form. Closing the form allows queued sync to resume. Money editing is briefly disabled while a sync/account operation is running. Conflicts must be resolved, or you can sign out, before editing account data again. Sync does not run while the app is closed, and reconnecting while it stays in the foreground may require **Sync now** or returning to the app.
+Sync is paused while a Money or Habit editor or delete confirmation is open, so a downloaded version cannot overwrite an unfinished form. Closing the form allows queued sync to resume. Editing both sections is briefly disabled while a sync/account operation is running. Conflicts must be resolved, or you can sign out, before editing account data again. Sync does not run while the app is closed, and reconnecting while it stays in the foreground may require **Sync now** or returning to the app.
+
+The repository implements sync; it does not prove your phone's data has been uploaded. Check that the intended Google account is active, that no local changes are waiting and no error/conflict is shown, then use **Sync now** and check the last successful sync time. A restore on a second configured device is the end-to-end verification. A new APK/native build is needed to install this update; all devices sharing the account should upgrade before syncing the new format. Older builds reject the new data version instead of discarding habits.
 
 Google account details are display metadata, not authorization. Access tokens are obtained/refreshed through the native SDK and the current Google identity is checked before Drive requests. Tokens and client secrets are not saved in the money JSON or AsyncStorage. Cached account data is still unencrypted local app storage; clearing/uninstalling can erase unsynced changes.
 
@@ -268,10 +272,11 @@ OAuth client IDs and app identifiers are public identifiers embedded in the buil
 
 ## Local Data Storage
 
-- Device-only mode saves one JSON object using AsyncStorage under `@money-tracker/data`, with an outer schema version of 1, wallet version 3, and trackers version 2.
-- Signed-in accounts use separate envelopes at `@money-tracker/account/<encoded Google subject ID>`, with the complete finance dataset, dirty flag, revision ancestry, and last sync date. `@money-tracker/active-account` stores only the selected profile; no tokens.
+- Device-only mode saves one JSON object using AsyncStorage under `@rho-tracker/data`, with app schema version 2, wallet version 3, trackers version 2, and habit data version 1.
+- Signed-in accounts keep their existing separate envelopes at `@money-tracker/account/<encoded Google subject ID>`, with the complete Money and Habits dataset, dirty flag, revision ancestry, and last sync date. `@money-tracker/active-account` stores only the selected profile; no tokens. Each account has its own habit history.
 - Balances, source selections, paid status, and recorded balance changes are saved together in one write. A failed save leaves both the balances and entries unchanged.
-- Older `@money-tracker/wallet` and `@money-tracker/trackers` keys are read only if the combined key is absent. They remain untouched as migration backups. An invalid combined record never falls back to those potentially stale backups.
+- If `@rho-tracker/data` is absent, migration reads the previous `@money-tracker/data` finance record and `@personal-tracker/habits` device habits. The older wallet/tracker keys are used only if the previous finance aggregate is absent. All old keys remain untouched as migration backups. Migration writes nothing until a successful edit. An invalid current aggregate never falls back to potentially stale backups.
+- Legacy finance-only cloud snapshots restore with empty account habits. Device habits are copied only after confirmation. The Drive snapshot/cache envelope retains version 1, but its validated data payload is version 2; old clients reject this payload. Finance transformations operate only on Money and preserve Habits, and habit transformations preserve Money.
 - Recurring entries are calculated when you view a year; only schedules and entries you explicitly change are stored. No background task is needed to generate them.
 - The wallet contains `sources` (each with a stable `id`, `name`, and integer `amountMinor`), currency fixed to `IDR`, `updatedAt`, and `version`. Amounts remain in hundredths of a rupiah. No separate total is stored.
 - Each tracker has `defaultSourceId`; saved entries can override `sourceId`. A paid entry's internal `applied` record remembers its signed balance change so edits, unpaying, and deletion can correct or reverse it without double-counting.
@@ -323,8 +328,10 @@ src/
   screens/MoneySourcesScreen.js Bank/cash source list and editing
   screens/TrackerScreen.js      Income/payment lists and entries
   screens/AccountScreen.js      Google sign-in, sync status and conflict choices
-  hooks/useMoneyData.js         Shared money data and save lock
-  storage/moneyStorage.js       Combined JSON persistence and migration
+  hooks/useMoneyData.js         Shared application session and foreground sync
+  hooks/useHabits.js            Habit view of the same account/session, no separate store
+  storage/appStorage.js         Atomic Money + Habits device persistence and migration
+  storage/moneyStorage.js       Legacy finance persistence, read during migration
   storage/cloudStorage.js       Per-account caches and active profile
   services/cloudSession.js      Offline-first account and sync controller
   services/cloudModel.js        Cloud/cache validation
@@ -332,6 +339,8 @@ src/
   services/googleAuth.js        Native sign-in and account verification
   config/google.js             Public OAuth IDs and runtime detection
   utils/finance.js              Linked balance updates and reversals
+  utils/appData.js              Versioned aggregate and domain-preserving transformations
+  utils/habits.js               Habit validation, schedules, and check-in history
   utils/money.js                Amount parsing and balance validation
   utils/trackers.js             Dates, recurrence and tracker validation
   theme.js                   Shared colors
@@ -345,6 +354,7 @@ tests/cloudStorage.test.js    Per-account envelope validation
 tests/driveStorage.test.js    Drive requests, revision graphs and error handling
 tests/googleAuth.test.js      Google identity, permissions and sanitized errors
 tests/appConfig.test.js       Native OAuth configuration
+tests/appData.test.js         Combined schema, migration, and failure protection
 ```
 
 ## Development Checks

@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { transformFileSync } = require('@babel/core');
 const finance = require('../src/utils/finance');
+const appData = require('../src/utils/appData');
+const habits = require('../src/utils/habits');
 const { createMoneySession } = require('../src/services/cloudSession');
 
 function loadModule(path, modules, globals = {}) {
@@ -24,6 +26,8 @@ function loadModule(path, modules, globals = {}) {
 }
 
 const DATA = '@money-tracker/data';
+const APP_DATA = '@rho-tracker/data';
+const HABITS = '@personal-tracker/habits';
 const WALLET = '@money-tracker/wallet';
 const TRACKERS = '@money-tracker/trackers';
 const key = '2024-01-31';
@@ -56,6 +60,16 @@ const initial = () =>
 		trackers: { version: 2, items: [] },
 	});
 const plain = (value) => JSON.parse(JSON.stringify(value));
+const initialApp = () => appData.validateAppData(initial());
+const habit = {
+	id: 'walk',
+	name: 'Walk',
+	kind: 'good',
+	days: [3],
+	startDate: key,
+	completions: {},
+};
+const completionTime = new Date('2024-01-31T12:00:00.000Z');
 
 function storageHarness(initialValues = {}) {
 	const values = new Map(Object.entries(initialValues));
@@ -285,6 +299,21 @@ test('save validates before its sole aggregate write and propagates single-write
 	assert.equal(storage.values.get(DATA), before);
 });
 
+function appStorageHarness(initialValues = {}) {
+	const storage = storageHarness(initialValues);
+	const habitStorage = loadModule('../src/storage/habitStorage.js', {
+		'@react-native-async-storage/async-storage': storage.native,
+		'../utils/habits': habits,
+	});
+	const api = loadModule('../src/storage/appStorage.js', {
+		'@react-native-async-storage/async-storage': storage.native,
+		'./moneyStorage': storage.api,
+		'./habitStorage': habitStorage,
+		'../utils/appData': appData,
+	});
+	return { ...storage, api };
+}
+
 function hookHarness(storage, options = {}) {
 	const states = [];
 	const refs = [];
@@ -364,7 +393,7 @@ function hookHarness(storage, options = {}) {
 				},
 			},
 			'expo-crypto': { randomUUID: () => `test-revision-${++timerId}` },
-			'../storage/moneyStorage': storage,
+			'../storage/appStorage': storage,
 			'../storage/cloudStorage': cloudStorage,
 			'../config/google': { getGoogleConfiguration: () => ({}) },
 			'../services/googleAuth': {
@@ -437,6 +466,10 @@ const mutations = (hook) => [
 	() => hook.saveTracker(item),
 	() => hook.saveEntry(item.id, key, entry),
 	() => hook.deleteTracker(item.id),
+	() => hook.saveHabit(habit),
+	() => hook.removeHabit(habit.id),
+	() => hook.toggleDate(habit.id, key, completionTime),
+	() => hook.importGuestHabits(),
 ];
 
 test('hook starts null, guards all writes before load and blocks duplicate loads', async () => {
@@ -447,13 +480,13 @@ test('hook starts null, guards all writes before load and blocks duplicate loads
 	let writes = 0;
 	const hook = hookHarness(
 		{
-			loadMoneyData: () => {
+			loadAppData: () => {
 				loads++;
 				return new Promise((resolve) => {
 					finishLoad = resolve;
 				});
 			},
-			saveMoneyData: async () => {
+			saveAppData: async () => {
 				writes++;
 			},
 		},
@@ -484,15 +517,15 @@ test('hook starts null, guards all writes before load and blocks duplicate loads
 	finishLoad(initial());
 	await flush();
 	assert.equal(hook.render().loading, false);
-	assert.deepEqual(hook.render().data, initial());
+	assert.deepEqual(hook.render().data, initialApp());
 });
 
 test('one synchronous shared save lock guards all mutations and reload; commit follows persistence', async () => {
 	let finishSave;
 	const writes = [];
 	const hook = hookHarness({
-		loadMoneyData: async () => initial(),
-		saveMoneyData: (data) => {
+		loadAppData: async () => initialApp(),
+		saveAppData: (data) => {
 			writes.push(data);
 			return new Promise((resolve) => {
 				finishSave = resolve;
@@ -516,11 +549,52 @@ test('one synchronous shared save lock guards all mutations and reload; commit f
 	assert.equal(hook.render().data.trackers.items.length, 1);
 });
 
+test('habit mutations acquire the same persistence lock and preserve finance data', async () => {
+	for (const action of ['saveHabit', 'removeHabit', 'toggleDate']) {
+		const data = initialApp();
+		data.habits.habits.push(habit);
+		let finishSave;
+		const writes = [];
+		const hook = hookHarness({
+			loadAppData: async () => data,
+			saveAppData: (next) => {
+				writes.push(next);
+				return new Promise((resolve) => {
+					finishSave = resolve;
+				});
+			},
+		});
+		hook.render();
+		hook.mount();
+		await flush();
+		const current = hook.render();
+		const committed = current.data;
+		const args = {
+			saveHabit: [{ ...habit, name: 'Changed habit' }],
+			removeHabit: [habit.id],
+			toggleDate: [habit.id, key, completionTime],
+		};
+		const pending = current[action](...args[action]);
+		assert.equal(hook.render().saving, true, action);
+		assert.equal(hook.render().data, committed, action);
+		for (const mutate of mutations(current)) assert.equal(await mutate(), false, action);
+		assert.equal(await current.reload(), false, action);
+		assert.equal(writes.length, 1, action);
+		assert.deepEqual(writes[0].wallet, committed.wallet, action);
+		assert.deepEqual(writes[0].trackers, committed.trackers, action);
+		finishSave();
+		assert.equal(await pending, true, action);
+		assert.equal(hook.render().saving, false, action);
+		assert.equal(hook.render().data, writes[0], action);
+		hook.unmount();
+	}
+});
+
 test('stale callbacks always act on latest committed ref across all action types', async () => {
 	const writes = [];
 	const hook = hookHarness({
-		loadMoneyData: async () => initial(),
-		saveMoneyData: async (data) => {
+		loadAppData: async () => initialApp(),
+		saveAppData: async (data) => {
 			writes.push(data);
 		},
 	});
@@ -528,6 +602,11 @@ test('stale callbacks always act on latest committed ref across all action types
 	hook.mount();
 	await flush();
 	const stale = hook.render();
+	assert.equal(await stale.saveHabit(habit), true);
+	assert.equal(await stale.toggleDate(habit.id, key, completionTime), true);
+	assert.equal(await stale.saveHabit({ ...habit, name: 'Evening walk', completions: {} }), true);
+	const committedHabits = plain(hook.render().data.habits);
+	assert.equal(committedHabits.habits[0].completions[key], completionTime.toISOString());
 	assert.equal(await stale.saveTracker(item), true);
 	assert.equal(await stale.saveEntry(item.id, key, entry), true);
 	assert.equal(hook.render().data.wallet.sources[0].amountMinor, 500);
@@ -544,15 +623,25 @@ test('stale callbacks always act on latest committed ref across all action types
 	assert.equal(await stale.deleteTracker(item.id), true);
 	assert.equal(hook.render().data.wallet.sources[0].amountMinor, 2600);
 	assert.equal(hook.render().data.trackers.items.length, 0);
-	assert.equal(writes.length, 7);
+	assert.deepEqual(plain(hook.render().data.habits), committedHabits);
+	assert.equal(writes.length, 10);
+	for (const data of writes.slice(3)) {
+		assert.equal(data.version, 2);
+		assert.deepEqual(plain(data.habits), committedHabits);
+	}
+	assert.equal(await stale.removeHabit(habit.id), true);
+	assert.equal(hook.render().data.habits.habits.length, 0);
+	assert.equal(hook.render().data.wallet.sources[0].amountMinor, 2600);
+	assert.equal(writes.length, 11);
 });
 
 test('validation and storage failures preserve both committed state and ref and unlock', async () => {
 	let fail = true;
 	let writes = 0;
 	const hook = hookHarness({
-		loadMoneyData: async () => finance.saveRecurringItem(initial(), item),
-		saveMoneyData: async () => {
+		loadAppData: async () =>
+			appData.validateAppData(finance.saveRecurringItem(initial(), item)),
+		saveAppData: async () => {
 			writes++;
 			if (fail) throw new Error('Storage full');
 		},
@@ -579,11 +668,11 @@ test('load failure blocks all writes until reload success, including after prior
 	let fail = true;
 	let writes = 0;
 	const hook = hookHarness({
-		loadMoneyData: async () => {
+		loadAppData: async () => {
 			if (fail) throw new Error('Corrupt data');
-			return initial();
+			return initialApp();
 		},
-		saveMoneyData: async () => {
+		saveAppData: async () => {
 			writes++;
 		},
 	});
@@ -612,15 +701,52 @@ test('load failure blocks all writes until reload success, including after prior
 	assert.equal(await current.saveTracker(item), true);
 });
 
-test('real aggregate storage and hook keep wallet/history atomic on failed save, retry and restart', async () => {
-	const data = finance.saveRecurringItem(initial(), item);
-	const storage = storageHarness({ [DATA]: JSON.stringify(data) });
+test('hook migrates real legacy finance and habits together without modifying either backup', async () => {
+	const oldMoney = JSON.stringify(initial());
+	const oldHabits = JSON.stringify({ version: 1, habits: [habit] });
+	const storage = appStorageHarness({ [DATA]: oldMoney, [HABITS]: oldHabits });
+	const hook = hookHarness(storage.api);
+	assert.equal(hook.render().data, null);
+	assert.equal(storage.reads.length, 0);
+	hook.mount();
+	await flush();
+	const current = hook.render();
+	assert.equal(current.loadError, null);
+	assert.equal(current.loading, false);
+	assert.deepEqual(plain(current.data), {
+		...initialApp(),
+		habits: { version: 1, habits: [habit] },
+	});
+	assert.deepEqual(storage.reads, [APP_DATA, DATA, HABITS]);
+	assert.equal(storage.writes.length, 0);
+	assert.equal(await current.saveTracker(item), true);
+	assert.equal(await current.saveEntry(item.id, key, entry), true);
+	assert.equal(await current.toggleDate(habit.id, key, completionTime), true);
+	assert.equal(storage.writes.length, 3);
+	assert.ok(storage.writes.every(([key]) => key === APP_DATA));
+	const stored = JSON.parse(storage.values.get(APP_DATA));
+	assert.equal(stored.version, 2);
+	assert.equal(stored.wallet.sources[0].amountMinor, 500);
+	assert.equal(stored.trackers.items[0].entries[key].applied.amountMinor, -500);
+	assert.equal(stored.habits.habits[0].completions[key], completionTime.toISOString());
+	assert.equal(storage.values.get(DATA), oldMoney);
+	assert.equal(storage.values.get(HABITS), oldHabits);
+	assert.equal(await current.reload(), true);
+	assert.deepEqual(plain(hook.render().data), stored);
+	assert.equal(storage.writes.length, 3);
+	hook.unmount();
+});
+
+test('real app storage and hook keep wallet/history atomic on failed save, retry and restart', async () => {
+	const data = appData.validateAppData(finance.saveRecurringItem(initial(), item));
+	data.habits.habits.push(habit);
+	const storage = appStorageHarness({ [APP_DATA]: JSON.stringify(data) });
 	const hook = hookHarness(storage.api);
 	hook.render();
 	hook.mount();
 	await flush();
 	const current = hook.render();
-	const oldRaw = storage.values.get(DATA);
+	const oldRaw = storage.values.get(APP_DATA);
 	const setItem = storage.native.setItem;
 	let attempts = 0;
 	storage.native.setItem = async () => {
@@ -629,13 +755,16 @@ test('real aggregate storage and hook keep wallet/history atomic on failed save,
 	};
 	await assert.rejects(current.saveEntry(item.id, key, entry), /Disk full/);
 	assert.equal(attempts, 1);
-	assert.equal(storage.values.get(DATA), oldRaw);
+	assert.equal(storage.values.get(APP_DATA), oldRaw);
 	assert.equal(hook.render().data.wallet.sources[0].amountMinor, 1000);
 	assert.equal(hook.render().data.trackers.items[0].entries[key], undefined);
 	storage.native.setItem = setItem;
 	assert.equal(await current.saveEntry(item.id, key, entry), true);
 	assert.equal(storage.writes.length, 1);
-	const stored = JSON.parse(storage.values.get(DATA));
+	assert.equal(storage.writes[0][0], APP_DATA);
+	const stored = JSON.parse(storage.values.get(APP_DATA));
+	assert.equal(stored.version, 2);
+	assert.deepEqual(stored.habits, data.habits);
 	assert.equal(stored.wallet.sources[0].amountMinor, 500);
 	assert.equal(stored.trackers.items[0].entries[key].applied.amountMinor, -500);
 	assert.equal(await current.reload(), true);
@@ -646,13 +775,16 @@ test('real aggregate storage and hook keep wallet/history atomic on failed save,
 	restarted.mount();
 	await flush();
 	assert.equal(restarted.render().data.wallet.sources[0].amountMinor, 500);
+	assert.deepEqual(plain(restarted.render().data.habits), data.habits);
 	assert.equal(await restarted.render().saveEntry(item.id, key, entry), true);
 	assert.equal(restarted.render().data.wallet.sources[0].amountMinor, 500);
+	assert.deepEqual(plain(restarted.render().data.habits), data.habits);
 });
 
 test('corrupt aggregate cannot be overwritten through hook even when valid legacy backups exist', async () => {
-	const storage = storageHarness({
-		[DATA]: '{broken',
+	const storage = appStorageHarness({
+		[APP_DATA]: '{broken',
+		[DATA]: JSON.stringify(initial()),
 		[WALLET]: JSON.stringify(initial().wallet),
 	});
 	const hook = hookHarness(storage.api);
@@ -662,14 +794,14 @@ test('corrupt aggregate cannot be overwritten through hook even when valid legac
 	const current = hook.render();
 	assert.ok(current.loadError);
 	for (const mutate of mutations(current)) assert.equal(await mutate(), false);
-	assert.deepEqual(storage.reads, [DATA]);
+	assert.deepEqual(storage.reads, [APP_DATA]);
 	assert.equal(storage.writes.length, 0);
-	assert.equal(storage.values.get(DATA), '{broken');
+	assert.equal(storage.values.get(APP_DATA), '{broken');
 });
 
 function adapterSession() {
 	let state = {
-		data: initial(),
+		data: initialApp(),
 		loading: true,
 		loadError: null,
 		account: { id: 'google-sub', email: 'person@example.com', name: 'Person' },
@@ -712,6 +844,40 @@ function adapterSession() {
 	};
 }
 const availableAuth = { availability: () => ({ available: true, reason: null }) };
+
+test('hook projects combined snapshots and exposes habit actions from its shared session', async () => {
+	const session = adapterSession();
+	const calls = [];
+	for (const name of ['saveHabit', 'removeHabit', 'toggleDate', 'importGuestHabits']) {
+		session[name] = async (...args) => {
+			calls.push([name, ...args]);
+			return true;
+		};
+	}
+	const hook = hookHarness({}, { session, auth: availableAuth });
+	hook.render();
+	hook.mount();
+	const data = initialApp();
+	data.habits.habits.push(habit);
+	session.emit({ data, canImportHabits: true });
+	const current = hook.render();
+	assert.equal(current.data, data);
+	assert.equal(current.canImportHabits, true);
+	assert.equal(current.account.id, 'google-sub');
+	for (const name of ['saveHabit', 'removeHabit', 'toggleDate', 'importGuestHabits'])
+		assert.equal(current[name], session[name]);
+	assert.equal(await current.saveHabit(habit), true);
+	assert.equal(await current.removeHabit(habit.id), true);
+	assert.equal(await current.toggleDate(habit.id, key, completionTime), true);
+	assert.equal(await current.importGuestHabits(), true);
+	assert.deepEqual(calls, [
+		['saveHabit', habit],
+		['removeHabit', habit.id],
+		['toggleDate', habit.id, key, completionTime],
+		['importGuestHabits'],
+	]);
+	hook.unmount();
+});
 
 test('hook subscribes before initialize, keeps one session, and cleans up lifecycle subscriptions', () => {
 	const session = adapterSession();
@@ -829,7 +995,7 @@ test('hook surfaces background account storage failure and preserves data until 
 	let fail = true;
 	let writes = 0;
 	const hook = hookHarness(
-		{ loadMoneyData: async () => initial() },
+		{ loadAppData: async () => initialApp() },
 		{
 			auth: { ...availableAuth, accessToken: async () => 'fake-access-token' },
 			drive: { listHeads: async () => ({ heads: [], nodes: [] }) },
@@ -875,6 +1041,6 @@ test('hook surfaces background account storage failure and preserves data until 
 	current = hook.render();
 	assert.equal(writes, 3);
 	assert.equal(current.syncError, null);
-	assert.deepEqual(current.data, initial());
+	assert.deepEqual(current.data, initialApp());
 	hook.unmount();
 });

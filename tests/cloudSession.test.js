@@ -2,6 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createMoneySession } = require('../src/services/cloudSession');
 const finance = require('../src/utils/finance');
+const habits = require('../src/utils/habits');
+const { validateAppData, changeFinance, changeHabits } = require('../src/utils/appData');
 const model = require('../src/services/cloudModel');
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -12,13 +14,28 @@ const profiles = {
 };
 const offline = () => Object.assign(new Error('offline secret-token'), { code: 'network' });
 function data(amount = 1000) {
+	return validateAppData(moneyData(amount));
+}
+function moneyData(amount = 1000) {
 	return finance.validateFinanceData({
 		...model.emptyData(),
+		version: 1,
 		wallet: {
 			...model.emptyData().wallet,
 			sources: [{ id: 'bank', name: 'Bank', amountMinor: amount }],
 		},
 	});
+}
+const habit = {
+	id: 'read',
+	name: 'Read',
+	kind: 'good',
+	days: [1, 2, 4, 5],
+	startDate: '2026-01-01',
+	completions: { '2026-11-12': DATE },
+};
+function withHabits(value = data(), items = [habit]) {
+	return validateAppData({ ...value, version: 2, habits: { version: 1, habits: items } });
 }
 const tracker = {
 	id: 'rent',
@@ -80,10 +97,10 @@ function harness({ guest = data(44), active = null, records = [], snapshots = []
 			writes.push(clone(value));
 			accounts.set(id, clone(value));
 		},
-		async loadMoneyData() {
+		async loadAppData() {
 			return clone(guest);
 		},
-		async saveMoneyData(value) {
+		async saveAppData(value) {
 			guest = clone(value);
 		},
 	};
@@ -195,8 +212,9 @@ test('initialize is offline, loads only active account cache, and missing/corrup
 });
 
 test('sign-in automatically restores sole cloud head without replaying paid amounts', async () => {
-	const paid = finance.saveRecurringEntry(
-		finance.saveRecurringItem(data(), tracker),
+	const paid = changeFinance(
+		changeFinance(data(), finance.saveRecurringItem, tracker),
+		finance.saveRecurringEntry,
 		'rent',
 		'2026-01-01',
 		entry,
@@ -342,7 +360,9 @@ test('offline local edits persist once, then upload immutable snapshot with base
 
 test('financial validation and failed account persistence never partially apply balance/history', async () => {
 	const h = harness({
-		snapshots: [snapshot('A', 'r1', [], finance.saveRecurringItem(data(), tracker))],
+		snapshots: [
+			snapshot('A', 'r1', [], changeFinance(data(), finance.saveRecurringItem, tracker)),
+		],
 	});
 	await h.session.initialize();
 	await h.session.signIn();
@@ -552,6 +572,10 @@ test('one synchronous lock rejects edits/reload/signout/signin while late sync r
 	assert.equal(await h.session.signIn(), false);
 	assert.equal(await h.session.sync(), false);
 	assert.equal(await h.session.importGuest(), false);
+	assert.equal(await h.session.saveHabit(habit), false);
+	assert.equal(await h.session.removeHabit(habit.id), false);
+	assert.equal(await h.session.toggleDate(habit.id, '2026-11-12', new Date(DATE)), false);
+	assert.equal(await h.session.importGuestHabits(), false);
 	await new Promise((resolve) => setImmediate(resolve));
 	await finish();
 	assert.equal(await pending, true);
@@ -567,14 +591,14 @@ test('load failures block all edits and reload recovery restores editing without
 	const h = harness();
 	await h.session.initialize();
 	const before = h.session.getState().data;
-	const load = h.storage.loadMoneyData;
-	h.storage.loadMoneyData = async () => {
+	const load = h.storage.loadAppData;
+	h.storage.loadAppData = async () => {
 		throw new Error('corrupt');
 	};
 	assert.equal(await h.session.reload(), false);
 	assert.equal(h.session.getState().data, before);
 	assert.equal(await h.session.updateSources([]), false);
-	h.storage.loadMoneyData = load;
+	h.storage.loadAppData = load;
 	assert.equal(await h.session.reload(), true);
 	assert.equal(await h.session.updateSources([]), true);
 });
@@ -586,7 +610,7 @@ test('logout guest/marker failures preserve active memory and native logout is b
 		await h.session.signIn();
 		const before = h.session.getState().data;
 		if (stage === 'guest')
-			h.storage.loadMoneyData = async () => {
+			h.storage.loadAppData = async () => {
 				throw new Error('guest corrupt');
 			};
 		if (stage === 'marker')
@@ -967,4 +991,356 @@ test('parent-provided configuration/cancellation/Play Services error mappings re
 		assert.match(h.session.getState().syncError, message);
 		assert.doesNotMatch(h.session.getState().syncError, /SECRET/);
 	}
+});
+
+test('every money mutation preserves complete habit settings and completion history', async (t) => {
+	t.mock.timers.enable({ apis: ['Date'], now: new Date(DATE) });
+	for (const account of [false, true]) {
+		const initial = withHabits(data());
+		const h = harness({
+			guest: initial,
+			snapshots: account ? [snapshot('A', 'r1', [], initial)] : [],
+		});
+		await h.session.initialize();
+		if (account) await h.session.signIn();
+		const mutations = [
+			['updateSources', [data(1200).wallet.sources], finance.updateMoneySources],
+			['saveTracker', [tracker], finance.saveRecurringItem],
+			['saveEntry', ['rent', '2026-01-01', entry], finance.saveRecurringEntry],
+			['saveTracker', [{ ...tracker, name: 'Monthly rent' }], finance.saveRecurringItem],
+			['deleteTracker', ['rent'], finance.deleteRecurringItem],
+		];
+		for (const [method, args, action] of mutations) {
+			const before = h.session.getState();
+			const expected = changeFinance(before.data, action, ...args);
+			assert.equal(await h.session[method](...args), true);
+			const after = h.session.getState();
+			assert.deepEqual(after.data, expected, method);
+			assert.deepEqual(after.data.habits, initial.habits, method);
+			assert.deepEqual(account ? h.accounts.get('A').data : h.guest, expected);
+			if (account) {
+				assert.notEqual(after.revision, before.revision);
+				assert.equal(after.dirty, true);
+			}
+		}
+		assert.equal(h.session.getState().data.wallet.sources[0].amountMinor, 1200);
+		assert.deepEqual(h.session.getState().data.trackers.items, []);
+	}
+});
+
+test('complete money and habit snapshots upload, restore, restart offline and remain account-isolated', async () => {
+	const paid = changeFinance(
+		changeFinance(data(), finance.saveRecurringItem, tracker),
+		finance.saveRecurringEntry,
+		'rent',
+		'2026-01-01',
+		entry,
+	);
+	const guest = withHabits(data(44), [{ ...habit, id: 'device-only' }]);
+	const other = withHabits(data(20), [{ ...habit, id: 'account-b', kind: 'bad' }]);
+	const h = harness({
+		guest,
+		snapshots: [snapshot('A', 'r1', [], paid), snapshot('B', 'b1', [], other)],
+	});
+	await h.session.initialize();
+	await h.session.signIn();
+	assert.equal(await h.session.saveHabit(habit), true);
+	const completedAt = new Date('2026-11-13T12:00:00.000Z');
+	assert.equal(await h.session.toggleDate(habit.id, '2026-11-12', completedAt), true);
+	const complete = clone(h.session.getState().data);
+	assert.equal(complete.wallet.sources[0].amountMinor, 500);
+	assert.deepEqual(complete.trackers, paid.trackers);
+	assert.deepEqual(complete.habits.habits[0].completions, {
+		'2026-11-12': completedAt.toISOString(),
+	});
+	assert.equal(await h.session.sync(), true);
+	const uploaded = h.files.get(`A:${h.session.getState().revision}`);
+	assert.equal(uploaded.version, 1);
+	assert.equal(uploaded.data.version, 2);
+	assert.deepEqual(uploaded.parents, ['r1']);
+	assert.deepEqual(uploaded.data, complete);
+	assert.equal(h.accounts.get('A').version, 1);
+	assert.throws(() => finance.validateFinanceData(uploaded.data), /version 1/);
+	const list = h.drive.listHeads;
+	h.drive.listHeads = async () => {
+		throw offline();
+	};
+	const restarted = h.createSession();
+	assert.equal(await restarted.initialize(), true);
+	assert.deepEqual(restarted.getState().data, complete);
+	assert.equal(await restarted.sync(), false);
+	assert.deepEqual(restarted.getState().data, complete);
+	h.drive.listHeads = list;
+	h.accounts.delete('A');
+	const restored = h.createSession();
+	assert.equal(await restored.signIn(), true);
+	assert.deepEqual(restored.getState().data, complete);
+	assert.equal(h.posts, 1);
+	h.select('B');
+	assert.equal(await restored.signIn(), true);
+	assert.deepEqual(restored.getState().data, other);
+	assert.deepEqual(h.accounts.get('A').data, complete);
+	assert.equal(await restored.signOut(), true);
+	assert.deepEqual(restored.getState().data, guest);
+	assert.deepEqual(h.guest, guest);
+	h.select('A');
+	assert.equal(await restored.signIn(), true);
+	assert.deepEqual(restored.getState().data, complete);
+});
+
+test('legacy v1 restore normalizes empty account habits without silently importing device habits', async () => {
+	const guest = withHabits(data(44));
+	const legacy = finance.saveRecurringEntry(
+		finance.saveRecurringItem(moneyData(), tracker),
+		'rent',
+		'2026-01-01',
+		entry,
+	);
+	const h = harness({ guest, snapshots: [snapshot('A', 'legacy', [], legacy)] });
+	await h.session.initialize();
+	assert.equal(await h.session.signIn(), true);
+	assert.deepEqual(h.session.getState().data, validateAppData(legacy));
+	assert.deepEqual(h.session.getState().data.habits, habits.createEmptyHabitData());
+	assert.equal(h.session.getState().canImportGuest, false);
+	assert.equal(h.session.getState().canImportHabits, true);
+	assert.equal(await h.session.sync(), true);
+	assert.deepEqual(h.session.getState().data, validateAppData(legacy));
+	assert.equal(h.session.getState().canImportHabits, true);
+	assert.equal(h.files.get('A:legacy').data.version, 1);
+	assert.deepEqual(h.guest, guest);
+	assert.equal(h.posts, 0);
+});
+
+test('explicit habit import preserves existing account balances and paid history and cannot overwrite habits', async () => {
+	const paid = changeFinance(
+		changeFinance(data(), finance.saveRecurringItem, tracker),
+		finance.saveRecurringEntry,
+		'rent',
+		'2026-01-01',
+		entry,
+	);
+	const guest = withHabits(data(44));
+	const h = harness({ guest, snapshots: [snapshot('A', 'r1', [], paid)] });
+	await h.session.initialize();
+	await h.session.signIn();
+	assert.equal(h.session.getState().canImportHabits, true);
+	assert.equal(await h.session.importGuest(), false);
+	assert.equal(await h.session.sync(), true);
+	assert.equal(h.session.getState().canImportHabits, true);
+	const before = h.session.getState();
+	h.setTime('2026-11-13T00:00:00.000Z');
+	assert.equal(await h.session.importGuestHabits(), true);
+	const imported = h.session.getState();
+	assert.deepEqual(imported.data, withHabits(paid));
+	assert.deepEqual(imported.data.wallet, before.data.wallet);
+	assert.deepEqual(imported.data.trackers, before.data.trackers);
+	assert.notEqual(imported.revision, before.revision);
+	assert.equal(imported.dirty, true);
+	assert.equal(imported.canImportHabits, false);
+	assert.equal(h.accounts.get('A').baseRevision, 'r1');
+	assert.equal(h.accounts.get('A').uploadUpdatedAt, '2026-11-13T00:00:00.000Z');
+	assert.deepEqual(h.guest, guest);
+	const stored = clone(h.accounts.get('A'));
+	assert.equal(await h.session.importGuestHabits(), false);
+	assert.deepEqual(h.accounts.get('A'), stored);
+	assert.equal(await h.session.sync(), true);
+	assert.equal(h.session.getState().canImportHabits, false);
+	assert.equal(await h.session.importGuestHabits(), false);
+	assert.deepEqual(h.files.get(`A:${imported.revision}`).data, withHabits(paid));
+	const populated = harness({
+		guest,
+		snapshots: [snapshot('A', 'r1', [], withHabits(paid, [{ ...habit, id: 'account-only' }]))],
+	});
+	await populated.session.initialize();
+	await populated.session.signIn();
+	assert.equal(populated.session.getState().canImportHabits, false);
+	const existing = clone(populated.accounts.get('A'));
+	assert.equal(await populated.session.importGuestHabits(), false);
+	assert.deepEqual(populated.accounts.get('A'), existing);
+	assert.equal(populated.posts, 0);
+});
+
+test('whole guest import includes money, habits and habits-only datasets without changing the guest backup', async () => {
+	for (const guest of [withHabits(data(44)), withHabits(model.emptyData())]) {
+		const h = harness({ guest });
+		await h.session.initialize();
+		assert.equal(await h.session.importGuestHabits(), false);
+		await h.session.signIn();
+		assert.deepEqual(h.session.getState().data, model.emptyData());
+		assert.equal(h.session.getState().canImportGuest, true);
+		assert.equal(h.session.getState().canImportHabits, true);
+		assert.equal(await h.session.sync(), true);
+		assert.equal(h.session.getState().canImportGuest, true);
+		assert.equal(await h.session.importGuest(), true);
+		assert.deepEqual(h.session.getState().data, guest);
+		assert.equal(h.session.getState().dirty, true);
+		assert.equal(await h.session.sync(), true);
+		assert.deepEqual([...h.files.values()][0].data, guest);
+		assert.deepEqual(h.guest, guest);
+		assert.equal(await h.session.importGuest(), false);
+	}
+});
+
+test('failed habit persistence keeps prior state and successful habit edits create fresh account revisions', async () => {
+	for (const account of [false, true]) {
+		for (const [method, args, action] of [
+			['saveHabit', [{ ...habit, name: 'Read books' }], habits.upsertHabit],
+			['removeHabit', [habit.id], habits.deleteHabit],
+			['toggleDate', [habit.id, '2026-11-12', new Date(DATE)], habits.toggleHabitDate],
+		]) {
+			const initial = withHabits();
+			const h = harness({
+				guest: initial,
+				snapshots: account ? [snapshot('A', 'r1', [], initial)] : [],
+			});
+			await h.session.initialize();
+			if (account) await h.session.signIn();
+			const before = h.session.getState();
+			const stored = clone(account ? h.accounts.get('A') : h.guest);
+			const persistence = account ? 'saveAccountData' : 'saveAppData';
+			const save = h.storage[persistence];
+			h.storage[persistence] = async () => {
+				throw new Error('disk full');
+			};
+			await assert.rejects(h.session[method](...args), /disk full/);
+			assert.equal(h.session.getState().data, before.data);
+			assert.equal(h.session.getState().revision, before.revision);
+			assert.equal(h.session.getState().dirty, before.dirty);
+			assert.equal(h.session.getState().saving, false);
+			assert.deepEqual(account ? h.accounts.get('A') : h.guest, stored);
+			h.storage[persistence] = save;
+			h.setTime('2026-11-13T00:00:00.000Z');
+			assert.equal(await h.session[method](...args), true);
+			assert.deepEqual(h.session.getState().data, changeHabits(initial, action, ...args));
+			assert.deepEqual(h.session.getState().data.wallet, initial.wallet);
+			assert.deepEqual(h.session.getState().data.trackers, initial.trackers);
+			if (account) {
+				const saved = clone(h.accounts.get('A'));
+				assert.notEqual(saved.localRevision, before.revision);
+				assert.equal(saved.dirty, true);
+				assert.equal(saved.baseRevision, 'r1');
+				assert.equal(saved.uploadUpdatedAt, '2026-11-13T00:00:00.000Z');
+				assert.deepEqual(h.guest, initial);
+				await assert.rejects(h.session.saveHabit({ ...habit, days: [] }));
+				assert.deepEqual(h.accounts.get('A'), saved);
+				const restarted = h.createSession();
+				await restarted.initialize();
+				assert.deepEqual(restarted.getState().data, saved.data);
+				assert.equal(restarted.getState().revision, saved.localRevision);
+			}
+		}
+	}
+});
+
+test('failed explicit habit import keeps account revision, eligibility, finance and guest backup intact', async () => {
+	const guest = withHabits(data(44));
+	const h = harness({ guest, snapshots: [snapshot('A', 'r1')] });
+	await h.session.initialize();
+	await h.session.signIn();
+	const before = h.session.getState();
+	const stored = clone(h.accounts.get('A'));
+	const save = h.storage.saveAccountData;
+	h.storage.saveAccountData = async () => {
+		throw new Error('disk full');
+	};
+	await assert.rejects(h.session.importGuestHabits(), /disk full/);
+	assert.equal(h.session.getState().data, before.data);
+	assert.equal(h.session.getState().revision, before.revision);
+	assert.equal(h.session.getState().dirty, false);
+	assert.equal(h.session.getState().canImportHabits, true);
+	assert.deepEqual(h.accounts.get('A'), stored);
+	assert.deepEqual(h.guest, guest);
+	h.storage.saveAccountData = save;
+	assert.equal(await h.session.importGuestHabits(), true);
+	assert.notEqual(h.session.getState().revision, before.revision);
+	assert.deepEqual(h.session.getState().data, withHabits(data()));
+});
+
+test('corrupt habit payloads block cloud writes and never replace valid account data', async () => {
+	for (const corrupt of [
+		null,
+		{ version: 99, habits: [] },
+		{ version: 1, habits: [habit, habit] },
+		{ version: 1, habits: [{ ...habit, completions: { '2026-11-12': 'invalid' } }] },
+	]) {
+		const invalid = { ...data(), habits: corrupt };
+		const h = harness({
+			active: profiles.A,
+			records: [record('A', withHabits(data(9)), 'local', true, null)],
+			snapshots: [snapshot('A', 'r1', [], invalid)],
+		});
+		assert.equal(await h.session.initialize(), true);
+		const before = h.session.getState();
+		assert.equal(await h.session.sync(), false);
+		assert.equal(h.session.getState().data, before.data);
+		assert.equal(h.session.getState().revision, before.revision);
+		assert.match(h.session.getState().syncError, /invalid or inconsistent/);
+		assert.equal(h.posts, 0);
+		assert.equal(h.writes.length, 0);
+		const cached = harness({
+			active: profiles.A,
+			records: [record('A', invalid, 'local', true, null)],
+		});
+		assert.equal(await cached.session.initialize(), false);
+		assert.equal(await cached.session.saveHabit(habit), false);
+		assert.equal(await cached.session.sync(), false);
+		assert.equal(cached.posts, 0);
+		assert.equal(cached.writes.length, 0);
+	}
+});
+
+test('unreadable or corrupt guest backup disables imports but never blocks valid account restore or sync', async () => {
+	for (const unreadable of [false, true]) {
+		const account = data(9);
+		const h = harness({ snapshots: [snapshot('A', 'r1', [], account)] });
+		await h.session.initialize();
+		h.storage.loadAppData = async () => {
+			if (unreadable) throw new Error('corrupt device backup');
+			return { ...data(44), habits: null };
+		};
+		assert.equal(await h.session.signIn(), true);
+		assert.deepEqual(h.session.getState().data, account);
+		assert.equal(h.session.getState().canImportGuest, false);
+		assert.equal(h.session.getState().canImportHabits, false);
+		assert.equal(h.session.getState().syncError, null);
+		const next = { ...account, wallet: data(10).wallet };
+		h.add(snapshot('A', 'r2', ['r1'], next));
+		assert.equal(await h.session.sync(), true);
+		assert.deepEqual(h.session.getState().data, next);
+		assert.equal(h.session.getState().canImportHabits, false);
+		assert.equal(h.posts, 0);
+	}
+});
+
+test('pending habit persistence holds the same lock as finance, import and account operations', async () => {
+	const h = harness({ guest: withHabits(data(44)), snapshots: [snapshot('A', 'r1')] });
+	await h.session.initialize();
+	await h.session.signIn();
+	assert.equal(h.session.getState().canImportHabits, true);
+	let finish;
+	const save = h.storage.saveAccountData;
+	h.storage.saveAccountData = (...args) =>
+		new Promise((resolve) => {
+			finish = async () => {
+				await save(...args);
+				resolve();
+			};
+		});
+	const pending = h.session.saveHabit(habit);
+	assert.equal(h.session.getState().saving, true);
+	assert.equal(await h.session.updateSources([]), false);
+	assert.equal(await h.session.saveTracker(tracker), false);
+	assert.equal(await h.session.saveHabit(habit), false);
+	assert.equal(await h.session.removeHabit(habit.id), false);
+	assert.equal(await h.session.toggleDate(habit.id, '2026-11-12', new Date(DATE)), false);
+	assert.equal(await h.session.importGuestHabits(), false);
+	assert.equal(await h.session.sync(), false);
+	assert.equal(await h.session.reload(), false);
+	assert.equal(await h.session.signIn(), false);
+	assert.equal(await h.session.signOut(), false);
+	await finish();
+	assert.equal(await pending, true);
+	assert.equal(h.session.getState().saving, false);
+	assert.deepEqual(h.session.getState().data.habits.habits, [{ ...habit, completions: {} }]);
+	assert.equal(h.posts, 0);
 });

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { randomUUID } from 'expo-crypto';
-import * as moneyStorage from '../storage/moneyStorage';
+import * as appStorage from '../storage/appStorage';
 import * as cloudStorage from '../storage/cloudStorage';
 import { getGoogleConfiguration } from '../config/google';
 import { createGoogleAuth } from '../services/googleAuth';
@@ -16,7 +16,7 @@ export function useMoneyData({ pauseSync = false } = {}) {
 	if (!sessionRef.current) {
 		authRef.current = createGoogleAuth({ configuration: getGoogleConfiguration() });
 		sessionRef.current = createMoneySession({
-			storage: { ...moneyStorage, ...cloudStorage },
+			storage: { ...appStorage, ...cloudStorage },
 			auth: authRef.current,
 			drive: createDriveStorage(),
 			createRevision: randomUUID,
@@ -84,10 +84,14 @@ export function useMoneyData({ pauseSync = false } = {}) {
 		saveTracker: session.saveTracker,
 		saveEntry: session.saveEntry,
 		deleteTracker: session.deleteTracker,
+		saveHabit: session.saveHabit,
+		removeHabit: session.removeHabit,
+		toggleDate: session.toggleDate,
 		signIn: session.signIn,
 		signOut: session.signOut,
 		sync,
 		importGuest: session.importGuest,
+		importGuestHabits: session.importGuestHabits,
 		resolveConflict: session.resolveConflict,
 	};
 }

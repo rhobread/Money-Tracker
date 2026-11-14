@@ -23,6 +23,7 @@ export function AccountScreen({ session, onBack, onHome }) {
 		syncError,
 		conflict,
 		canImportGuest,
+		canImportHabits,
 		googleAvailability,
 		loadError,
 	} = session;
@@ -39,7 +40,8 @@ export function AccountScreen({ session, onBack, onHome }) {
 
 	function goBack() {
 		if (saving || confirming.current) return;
-		if (conflict) onHome?.();
+		if (onHome) onHome();
+		else if (conflict) return;
 		else onBack();
 	}
 
@@ -98,11 +100,12 @@ export function AccountScreen({ session, onBack, onHome }) {
 					onPress={goBack}
 					style={styles.back}
 				>
-					<Text style={styles.link}>
-						{conflict && onHome ? '< Personal Tracker' : '< Balance'}
-					</Text>
+					<Text style={styles.link}>{onHome ? '< Rho Tracker' : '< Balance'}</Text>
 				</Pressable>
 				<Text style={styles.title}>Google Drive</Text>
+				<Text style={styles.body}>
+					Account snapshots include Money and Habits, including check-in history.
+				</Text>
 				<View style={styles.card}>
 					<Text style={styles.heading}>
 						{account ? account.name || account.email : 'Device only'}
@@ -118,7 +121,9 @@ export function AccountScreen({ session, onBack, onHome }) {
 									: dirty
 										? 'Changes saved on this phone. Waiting to sync.'
 										: account
-											? 'Your account data is available on this phone.'
+											? lastSyncedAt
+												? 'No local changes waiting to sync. Last successful check is shown below.'
+												: 'Account data is cached here. A successful Drive sync has not been confirmed.'
 											: 'Your data stays on this phone until you connect an account and copy it.'}
 					</Text>
 					{lastSyncedAt && (
@@ -171,8 +176,8 @@ export function AccountScreen({ session, onBack, onHome }) {
 								<Text style={styles.heading}>Use your existing device data?</Text>
 								<Text style={styles.body}>
 									This account has no Drive data yet. You can copy your
-									device-only balances, income, and payments to {account.email}.
-									The device-only copy stays unchanged.
+									device-only balances, income, payments, and habits to{' '}
+									{account.email}. The device-only copy stays unchanged.
 								</Text>
 								<Pressable
 									accessibilityRole="button"
@@ -180,7 +185,7 @@ export function AccountScreen({ session, onBack, onHome }) {
 									onPress={() =>
 										confirm(
 											'Copy data to this account?',
-											`Copy this phone's device-only money data to ${account.email}?`,
+											`Copy this phone's device-only Money and Habits to ${account.email}?`,
 											session.importGuest,
 											'Copy data',
 										)
@@ -191,6 +196,31 @@ export function AccountScreen({ session, onBack, onHome }) {
 								</Pressable>
 							</View>
 						)}
+						{canImportHabits && !canImportGuest && (
+							<View style={styles.card}>
+								<Text style={styles.heading}>Bring your device habits</Text>
+								<Text style={styles.body}>
+									This account has no habits yet. Copy this device's habits and
+									check-ins without changing its Money data. The device copy is
+									kept.
+								</Text>
+								<Pressable
+									accessibilityRole="button"
+									disabled={saving}
+									onPress={() =>
+										confirm(
+											'Copy device habits?',
+											`Copy device-only habits and check-ins to ${account.email}? Account balances and payments will not change.`,
+											session.importGuestHabits,
+											'Copy habits',
+										)
+									}
+									style={styles.button}
+								>
+									<Text style={styles.buttonText}>Copy device-only habits</Text>
+								</Pressable>
+							</View>
+						)}
 					</>
 				)}
 				{conflict && (
@@ -198,8 +228,9 @@ export function AccountScreen({ session, onBack, onHome }) {
 						<Text style={styles.heading}>Different saved versions</Text>
 						<Text style={styles.body}>
 							Another device changed the data too. Nothing is merged automatically, so
-							paid entries cannot be counted twice. Choose one complete version, or
-							sign out to continue with device-only data.
+							paid entries cannot be counted twice. The choice replaces both Money and
+							Habits, including check-ins. Choose one complete version, or sign out to
+							continue with device-only data.
 						</Text>
 						<Text style={styles.body}>{conflict.message}</Text>
 						<Pressable
